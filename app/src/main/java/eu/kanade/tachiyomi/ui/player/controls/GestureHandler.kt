@@ -131,6 +131,7 @@ fun GestureHandler(
     val areControlsLocked by viewModel.areControlsLocked.collectAsState()
     val disableLongPressScr by playerPreferences.disableLongPressScreenshot().collectAsState()
     val singleTapToPause by playerPreferences.singleTapToPause().collectAsState()
+    val tapVideoToOcr by playerPreferences.tapVideoToOcr().collectAsState()
     val seekAmount by viewModel.doubleTapSeekAmount.collectAsState()
     val isSeekingForwards by viewModel.isSeekingForwards.collectAsState()
     var isDoubleTapSeeking by remember { mutableStateOf(false) }
@@ -211,7 +212,9 @@ fun GestureHandler(
                                     delay(doubleTapWindowMillis)
                                     if (lastTapAt == now) {
                                         lastTapAt = 0L
-                                        if (singleTapToPause) {
+                                        if (tapVideoToOcr) {
+                                            viewModel.requestOcr()
+                                        } else if (singleTapToPause) {
                                             if (viewModel.paused.value) {
                                                 viewModel.unpause()
                                                 viewModel.hideControls()

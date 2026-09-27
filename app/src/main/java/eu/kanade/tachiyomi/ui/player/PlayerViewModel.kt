@@ -376,6 +376,7 @@ class PlayerViewModel @JvmOverloads constructor(
 
     private val _ocrScreenshot = MutableStateFlow<Bitmap?>(null)
     val ocrScreenshot: StateFlow<Bitmap?> = _ocrScreenshot.asStateFlow()
+    private var resumeAfterOcr = false
     private val _isCapturingOcr = MutableStateFlow(false)
     val isCapturingOcr: StateFlow<Boolean> = _isCapturingOcr.asStateFlow()
     private val _suppressTap = MutableStateFlow(false)
@@ -1519,6 +1520,7 @@ class PlayerViewModel @JvmOverloads constructor(
 
     fun requestOcr() {
         if (_isCapturingOcr.value) return
+        resumeAfterOcr = !paused.value
         _isCapturingOcr.value = true
         _suppressTap.value = true
         if (_controlsShown.value) {
@@ -1531,14 +1533,22 @@ class PlayerViewModel @JvmOverloads constructor(
             _suppressTap.value = false
             if (screenshot == null) {
                 eventChannel.send(Event.OcrFailed)
+                if (resumeAfterOcr) {
+                    unpause()
+                }
+                resumeAfterOcr = false
             } else {
                 _ocrScreenshot.value = screenshot
             }
         }
     }
 
-    fun dismissOcrScreenshot() {
+    fun dismissOcrScreenshot(resumePlayback: Boolean = false) {
         _ocrScreenshot.value = null
+        if (resumePlayback && resumeAfterOcr) {
+            unpause()
+        }
+        resumeAfterOcr = false
     }
 
     fun hideSeekBar() {

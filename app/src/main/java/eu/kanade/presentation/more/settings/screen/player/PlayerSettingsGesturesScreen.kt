@@ -79,6 +79,11 @@ object PlayerSettingsGesturesScreen : SearchableSettings {
                     preference = playerPreferences.singleTapToPause(),
                     title = stringResource(MR.strings.pref_single_tap_to_pause),
                 ),
+                Preference.PreferenceItem.SwitchPreference(
+                    preference = playerPreferences.tapVideoToOcr(),
+                    title = "Tap video to OCR",
+                    subtitle = "Pause and OCR the current video frame on tap. Tap outside OCR text to exit and resume playback.",
+                ),
             ),
         )
     }

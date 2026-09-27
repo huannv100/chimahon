@@ -60,6 +60,7 @@ internal fun PlayerVideoOcrOverlay(
     viewModel: PlayerViewModel,
     screenshot: Bitmap?,
     onDismiss: () -> Unit,
+    onDismissAndResume: () -> Unit,
 ) {
     if (screenshot == null) return
 
@@ -193,7 +194,7 @@ internal fun PlayerVideoOcrOverlay(
                     showTapHint = false
                 }
             },
-            onEmptyTap = { onDismiss() },
+            onEmptyTap = { onDismissAndResume() },
         )
 
         OcrStatusOverlay(

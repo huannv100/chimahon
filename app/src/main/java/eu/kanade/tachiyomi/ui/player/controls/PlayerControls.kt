@@ -838,6 +838,9 @@ fun PlayerControls(
             viewModel = viewModel,
             screenshot = ocrScreenshot,
             onDismiss = dismissVideoOcr,
+            onDismissAndResume = {
+                viewModel.dismissOcrScreenshot(resumePlayback = true)
+            },
         )
     }
 

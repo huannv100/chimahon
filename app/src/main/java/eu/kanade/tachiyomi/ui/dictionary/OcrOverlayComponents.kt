@@ -13,6 +13,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -50,26 +52,63 @@ fun OcrBlockCanvas(
     onBlockTapped: (OcrTextBlock, Float, Float) -> Unit,
     onEmptyTap: () -> Unit,
     modifier: Modifier = Modifier,
+    forgivingTaps: Boolean = false,
+    allowEmptyTap: Boolean = true,
 ) {
     val highlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+    val currentBlockTapped by rememberUpdatedState(onBlockTapped)
+    val currentEmptyTap by rememberUpdatedState(onEmptyTap)
 
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(blocks) {
+            .pointerInput(blocks, forgivingTaps, allowEmptyTap) {
                 detectTapGestures { offset ->
-                    val tapped = blocks.firstOrNull { block ->
-                        offset.x >= block.xmin * size.width &&
-                            offset.x <= block.xmax * size.width &&
-                            offset.y >= block.ymin * size.height &&
-                            offset.y <= block.ymax * size.height
-                    }
-                    if (tapped == null) {
-                        onEmptyTap()
+                    if (size.width <= 0 || size.height <= 0) return@detectTapGestures
+                    if (forgivingTaps) {
+                        val widthDp = size.width / density
+                        val heightDp = size.height / density
+                        val rectangles = blocks.flatMapIndexed { index, block ->
+                            val lineRects = block.lineGeometries
+                                ?.takeIf { it.size == block.lines.size }
+                                ?.mapIndexedNotNull { line, geo ->
+                                    if (block.lines[line].isBlank()) return@mapIndexedNotNull null
+                                    OcrTapRect(
+                                        index, geo.xmin * widthDp, geo.ymin * heightDp,
+                                        geo.xmax * widthDp, geo.ymax * heightDp,
+                                    ).takeIf { it.valid }
+                                }
+                            lineRects?.takeIf { it.isNotEmpty() } ?: listOf(
+                                OcrTapRect(
+                                    index, block.xmin * widthDp, block.ymin * heightDp,
+                                    block.xmax * widthDp, block.ymax * heightDp,
+                                ),
+                            )
+                        }
+                        when (val result = resolveOcrTap(rectangles, offset.x / density, offset.y / density)) {
+                            is OcrTapResult.Hit -> currentBlockTapped(
+                                blocks[result.blockIndex],
+                                (result.x / widthDp).coerceIn(0f, 1f),
+                                (result.y / heightDp).coerceIn(0f, 1f),
+                            )
+                            OcrTapResult.Empty -> if (allowEmptyTap) currentEmptyTap()
+                            OcrTapResult.KeepOpen -> Unit
+                        }
                     } else {
-                        val tapX = (offset.x / size.width).coerceIn(0f, 1f)
-                        val tapY = (offset.y / size.height).coerceIn(0f, 1f)
-                        onBlockTapped(tapped, tapX, tapY)
+                        // Keep ordinary reader, camera and video OCR hit testing unchanged.
+                        val tapped = blocks.firstOrNull { block ->
+                            offset.x >= block.xmin * size.width &&
+                                offset.x <= block.xmax * size.width &&
+                                offset.y >= block.ymin * size.height &&
+                                offset.y <= block.ymax * size.height
+                        }
+                        if (tapped == null) {
+                            if (allowEmptyTap) currentEmptyTap()
+                        } else {
+                            val tapX = (offset.x / size.width).coerceIn(0f, 1f)
+                            val tapY = (offset.y / size.height).coerceIn(0f, 1f)
+                            currentBlockTapped(tapped, tapX, tapY)
+                        }
                     }
                 }
             },

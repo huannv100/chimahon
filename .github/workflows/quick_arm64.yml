@@ -38,22 +38,26 @@ jobs:
           java-version-file: .github/.java-version
           distribution: temurin
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
-      - name: Check floating OCR safety invariants
-        run: python3 qa/verify_floating_ocr.py
+      - name: Check floating OCR safety and touch invariants
+        run: |
+          python3 qa/verify_floating_ocr.py
+          python3 qa/verify_touchfix6.py
       - name: Build ARM64 preview APK
-        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-floating-ocr-focusfix.5 -PreleaseVersionCode=24605 --console=plain
-      - name: Run app unit tests including window focus policy
+        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-floating-ocr-touchfix.6 -PreleaseVersionCode=24606 --console=plain
+      - name: Run app unit tests including forgiving taps and long press
         run: ./gradlew :app:testReleaseUnitTest --console=plain
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: floating-ocr-focusfix-test-reports
-          path: app/build/reports/tests/
+          name: floating-ocr-touchfix6-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/testReleaseUnitTest/*.xml
           if-no-files-found: ignore
       - name: Upload ARM64 APK after successful build and tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: Chimahon-S24-floating-OCR-focusfix-arm64
+          name: Chimahon-S24-floating-OCR-touchfix6-arm64
           path: app/build/outputs/apk/preview/*arm64-v8a*.apk
           if-no-files-found: error

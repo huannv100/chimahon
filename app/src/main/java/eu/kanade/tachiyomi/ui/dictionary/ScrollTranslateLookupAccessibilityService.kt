@@ -51,6 +51,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private var lastDisplayBounds: Rect? = null
     private var floatingButton: View? = null
     private var floatingButtonParams: WindowManager.LayoutParams? = null
+    private var cancelFloatingGesture: (() -> Unit)? = null
     private val windowOwners = linkedMapOf<Int, String>()
 
     override fun onServiceConnected() {
@@ -102,6 +103,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        cancelFloatingGesture?.invoke()
         scheduleRefresh()
     }
 
@@ -138,6 +140,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                     CaptureTarget(window.id, Rect(bounds), Rect(displayBounds))
                 }
             if (locked()) {
+                cancelFloatingGesture?.invoke()
                 session.reset()
                 overlay?.dismiss()
                 floatingButton?.visibility = View.INVISIBLE
@@ -259,8 +262,13 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
             }
             elevation = 8.dp.toFloat()
             alpha = buttonAlpha().coerceIn(0.25f, 1f)
-            contentDescription = "Screen OCR"
+            contentDescription = "Screen OCR. Long press to hide button."
             setOnClickListener { triggerManualLookup() }
+            setOnLongClickListener {
+                removeFloatingButton()
+                message("OCR button hidden. Open Screen OCR in Chimahon to show it again.")
+                true
+            }
             addView(
                 ImageView(this@ScrollTranslateLookupAccessibilityService).apply {
                     setImageResource(R.drawable.ic_chimahon)
@@ -293,6 +301,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
             floatingButton = button
             floatingButtonParams = params
         }.onFailure {
+            cancelFloatingGesture?.invoke()
+            cancelFloatingGesture = null
             Log.w(TAG, "Cannot show floating OCR button", it)
             message("Could not show the OCR button. Disable and re-enable the accessibility service.")
         }
@@ -301,36 +311,64 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private fun View.installDragHandler(params: WindowManager.LayoutParams) {
         val wm = requiredService<WindowManager>()
         val touchSlop = ViewConfiguration.get(this@ScrollTranslateLookupAccessibilityService).scaledTouchSlop
+        val holdMs = ViewConfiguration.getLongPressTimeout().toLong()
+        val gesture = FloatingOcrButtonGesture(touchSlop.toFloat(), holdMs)
         var downRawX = 0f
         var downRawY = 0f
         var startX = 0
         var startY = 0
-        var moved = false
-        var canceled = false
+        val longPress = Runnable {
+            if (operational && floatingButton === this && isAttachedToWindow && !locked() &&
+                gesture.hold(SystemClock.uptimeMillis()) == FloatingOcrButtonGesture.Action.HIDE
+            ) performLongClick()
+        }
+        val cancelGesture: () -> Unit = {
+            removeCallbacks(longPress)
+            gesture.cancel()
+        }
+        cancelFloatingGesture = cancelGesture
+        addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) = cancelGesture()
+        })
         setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    cancelGesture()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     startX = params.x
                     startY = params.y
-                    moved = false
-                    canceled = false
+                    gesture.down(event.rawX, event.rawY, event.eventTime)
+                    postDelayed(longPress, holdMs)
                 }
-                MotionEvent.ACTION_POINTER_DOWN -> canceled = true
+                MotionEvent.ACTION_POINTER_DOWN -> cancelGesture()
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - downRawX).roundToInt()
-                    val dy = (event.rawY - downRawY).roundToInt()
-                    moved = moved || kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop
-                    if (moved && !canceled) {
+                    // Batched movement must also cancel a hold, even after moving back.
+                    val screenOffsetX = event.rawX - event.x
+                    val screenOffsetY = event.rawY - event.y
+                    for (i in 0 until event.historySize) {
+                        gesture.move(event.getHistoricalX(i) + screenOffsetX, event.getHistoricalY(i) + screenOffsetY)
+                    }
+                    if (gesture.move(event.rawX, event.rawY) == FloatingOcrButtonGesture.Action.DRAG) {
+                        removeCallbacks(longPress)
+                        val dx = (event.rawX - downRawX).roundToInt()
+                        val dy = (event.rawY - downRawY).roundToInt()
                         val bounds = wm.currentWindowMetrics.bounds
                         params.x = (startX + dx).coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
                         params.y = (startY + dy).coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
                         runCatching { wm.updateViewLayout(this, params) }
                     }
                 }
-                MotionEvent.ACTION_UP -> if (!moved && !canceled) performClick()
-                MotionEvent.ACTION_CANCEL -> canceled = true
+                MotionEvent.ACTION_UP -> {
+                    removeCallbacks(longPress)
+                    when (gesture.up(event.rawX, event.rawY, event.eventTime)) {
+                        FloatingOcrButtonGesture.Action.CLICK -> performClick()
+                        FloatingOcrButtonGesture.Action.HIDE -> performLongClick()
+                        else -> Unit
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> cancelGesture()
             }
             true
         }
@@ -347,6 +385,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun removeFloatingButton() {
+        cancelFloatingGesture?.invoke()
+        cancelFloatingGesture = null
         val wm = getSystemService(WindowManager::class.java)
         floatingButton?.let { view -> runCatching { wm?.removeView(view) } }
         floatingButton = null

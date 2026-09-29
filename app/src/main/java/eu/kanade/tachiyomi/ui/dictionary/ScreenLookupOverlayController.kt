@@ -366,6 +366,8 @@ internal fun ScreenLookupOverlay(
             activeMatchCount = matchedCharCount,
             activeMatchOffset = matchOffset,
             selection = selection,
+            forgivingTaps = showOriginalSnapshot,
+            allowEmptyTap = !showOriginalSnapshot || !isLoading,
             onBlockTapped = { tapped, tapX, tapY ->
                 val charOffset = tapped.screenLookupCharOffset(tapX, tapY)
                 val text = tapped.fullText

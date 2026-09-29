@@ -1,0 +1,98 @@
+name: Quick ARM64 test APK
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: floating-ocr-arm64-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+          show-progress: false
+      - name: Remove unused legacy vendor wrapper
+        run: rm -f vendor/FlexibleAdapter/gradle/wrapper/gradle-wrapper.jar vendor/FlexibleAdapter/gradlew vendor/FlexibleAdapter/gradlew.bat
+      - name: Limit this CI build to arm64-v8a
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          app = Path('app/build.gradle.kts')
+          s = app.read_text()
+          assert 'include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")' in s
+          app.write_text(s.replace('isUniversalApk = true', 'isUniversalApk = false').replace('include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")', 'include("arm64-v8a")'))
+          PY
+      - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
+      - name: Check floating OCR safety and touch invariants
+        run: |
+          python3 qa/verify_floating_ocr.py
+          python3 qa/verify_touchfix6.py
+      - name: Build Huan OCR ARM64 preview APK
+        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-huan-ocr.7 -PreleaseVersionCode=24607 --console=plain
+      - name: Verify installed app name, package and APK signature
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/preview -name '*arm64-v8a*.apk' -print -quit)
+          test -n "$APK"
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > huan-ocr-badging.txt
+          "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > huan-ocr-manifest.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > huan-ocr-signature.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+          text = Path('huan-ocr-badging.txt').read_text()
+          assert "package: name='app.chimahon.beta'" in text, 'Application ID changed'
+          assert "versionCode='24607'" in text, 'Unexpected version code'
+          labels = re.findall(r"^application-label[^:]*:'(.*)'$", text, re.M)
+          assert labels and all(label == 'Huan OCR' for label in labels), labels
+          # aapt prints an empty activity label when Android inherits the application label.
+          launcher = re.search(r"^launchable-activity:.* label='([^']*)'", text, re.M)
+          assert launcher and launcher.group(1) in ('', 'Huan OCR'), 'Launcher label differs'
+          ns = '{http://schemas.android.com/apk/res/android}'
+          manifest = ET.parse('app/src/main/AndroidManifest.xml').getroot()
+          app = manifest.find('application')
+          assert app.get(ns + 'label') == '@string/app_name'
+          main = next(a for a in app.findall('activity') if a.get(ns + 'name', '').endswith('.ui.main.MainActivity'))
+          assert main.get(ns + 'label') in (None, '@string/app_name'), 'Unexpected launcher override'
+          service = next(s for s in app.findall('service') if s.get(ns + 'name', '').endswith('.ScrollTranslateLookupAccessibilityService'))
+          assert service.get(ns + 'label') == '@string/app_name'
+          print('PASS: Huan OCR app label in every packaged locale; launcher and accessibility use the same label.')
+          print('PASS: app.chimahon.beta retained; versionCode 24607; APK signature verified.')
+          PY
+      - name: Run app unit tests including forgiving taps and long press
+        run: ./gradlew :app:testReleaseUnitTest --console=plain
+      - name: Upload unit test reports and app identity checks
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Huan-OCR-7-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/testReleaseUnitTest/*.xml
+            huan-ocr-badging.txt
+            huan-ocr-manifest.txt
+            huan-ocr-signature.txt
+          if-no-files-found: ignore
+      - name: Upload Huan OCR ARM64 APK after successful build and tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Huan-OCR-7-arm64
+          path: app/build/outputs/apk/preview/*arm64-v8a*.apk
+          if-no-files-found: error

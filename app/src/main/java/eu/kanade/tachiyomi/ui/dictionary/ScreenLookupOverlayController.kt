@@ -12,9 +12,12 @@ import android.view.WindowManager
 import android.webkit.WebView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -26,6 +29,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -43,7 +48,6 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import chimahon.DictionaryRepository
 import chimahon.MediaInfo
-import chimahon.ocr.CropPresets
 import chimahon.ocr.OcrLanguage
 import eu.kanade.tachiyomi.data.ocr.recognizePage
 import eu.kanade.tachiyomi.ui.reader.viewer.OcrLookupPopup
@@ -52,20 +56,21 @@ import eu.kanade.tachiyomi.ui.reader.viewer.displayText
 import eu.kanade.tachiyomi.ui.reader.viewer.extractOcrLookupString
 import eu.kanade.tachiyomi.ui.reader.viewer.fullText
 import eu.kanade.tachiyomi.ui.reader.viewer.isLookupStartChar
-import eu.kanade.tachiyomi.util.system.toast
 import eu.kanade.tachiyomi.util.view.setComposeContent
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import tachiyomi.core.common.i18n.stringResource as contextStringResource
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.i18n.stringResource
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import tachiyomi.core.common.i18n.stringResource as contextStringResource
 
 private const val TAP_HINT_DURATION_MS = 1_200L
 
@@ -73,7 +78,11 @@ internal class ScreenLookupOverlayController(
     private val context: Context,
     private val windowManager: WindowManager,
     private val onDismiss: () -> Unit,
+    private val windowType: Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+    private val showOriginalSnapshot: Boolean = false,
+    private val dismissOnEmptyTap: Boolean = false,
 ) {
+    private val preserveWindowFocus = ScreenLookupWindowPolicy.preservesFocus(windowType)
     private var overlayView: ComposeView? = null
     private var lifecycleOwner: OverlayLifecycleOwner? = null
     private var screenshot: Bitmap? = null
@@ -91,9 +100,12 @@ internal class ScreenLookupOverlayController(
         dismiss(recycleScreenshot = true, notify = false)
         screenshot = nextScreenshot
 
-        val profile = cachedProfile
-            ?: Injekt.get<DictionaryPreferences>().profileStore.getActiveProfile()
-                .also { cachedProfile = it }
+        val profile = Injekt.get<DictionaryPreferences>().profileStore.getActiveProfile()
+        if (cachedProfile != profile) {
+            cachedWebView?.runCatching { destroy() }
+            cachedWebView = null
+            cachedProfile = profile
+        }
         val webView = cachedWebView
             ?: prepareDictionaryWebViewShell(context, languageCode = profile.languageCode)
                 .also { cachedWebView = it }
@@ -110,16 +122,18 @@ internal class ScreenLookupOverlayController(
         lifecycleOwner = owner
 
         val view = ComposeView(context).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_BACK) {
-                    if (event.action == KeyEvent.ACTION_UP) {
-                        handleBack()
+            isFocusable = !preserveWindowFocus
+            isFocusableInTouchMode = !preserveWindowFocus
+            if (!preserveWindowFocus) {
+                setOnKeyListener { _, keyCode, event ->
+                    if (keyCode == KeyEvent.KEYCODE_BACK) {
+                        if (event.action == KeyEvent.ACTION_UP) {
+                            handleBack()
+                        }
+                        true
+                    } else {
+                        false
                     }
-                    true
-                } else {
-                    false
                 }
             }
             setViewTreeLifecycleOwner(owner)
@@ -132,6 +146,8 @@ internal class ScreenLookupOverlayController(
                     activeProfile = profile,
                     onClose = { dismiss() },
                     onBack = { overlayBackHandler = it },
+                    showOriginalSnapshot = showOriginalSnapshot,
+                    dismissOnEmptyTap = dismissOnEmptyTap,
                 )
             }
         }
@@ -139,10 +155,11 @@ internal class ScreenLookupOverlayController(
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            windowType,
+            ScreenLookupWindowPolicy.flagsFor(windowType),
             PixelFormat.TRANSLUCENT,
         ).apply {
+            title = if (preserveWindowFocus) "Chimahon original OCR (non-focusable)" else "Chimahon screen OCR"
             gravity = Gravity.TOP or Gravity.START
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 fitInsetsTypes = 0
@@ -156,20 +173,26 @@ internal class ScreenLookupOverlayController(
 
         windowManager.addView(view, params)
         overlayView = view
-        view.requestFocus()
-        registerBackCallback(view)
+        // A focus request here used to dismiss the Google assistant/translation window.
+        if (!preserveWindowFocus) {
+            view.requestFocus()
+            registerBackCallback(view)
+        }
     }
 
     fun dismiss(recycleScreenshot: Boolean = true, notify: Boolean = true) {
         overlayView?.let { view ->
             unregisterBackCallback(view)
+            view.disposeComposition()
             runCatching { windowManager.removeView(view) }
         }
         overlayView = null
         overlayBackHandler = null
         lifecycleOwner?.performDestroy()
         lifecycleOwner = null
-        if (recycleScreenshot) {
+        // Native OCR may still own the original snapshot after cancellation.
+        // Leave that bitmap to GC instead of recycling pixels under a worker.
+        if (recycleScreenshot && !showOriginalSnapshot) {
             screenshot?.takeUnless { it.isRecycled }?.recycle()
         }
         screenshot = null
@@ -180,6 +203,7 @@ internal class ScreenLookupOverlayController(
         dismiss(recycleScreenshot = true, notify = false)
         lookupWarmupJob?.cancel()
         lookupWarmupJob = null
+        lookupWarmupScope.cancel()
         cachedWebView?.runCatching { destroy() }
         cachedWebView = null
         cachedProfile = null
@@ -255,6 +279,8 @@ internal fun ScreenLookupOverlay(
     mediaInfo: MediaInfo? = null,
     titleId: String? = null,
     onRequestSentenceAudio: (suspend () -> ByteArray?)? = null,
+    showOriginalSnapshot: Boolean = false,
+    dismissOnEmptyTap: Boolean = false,
 ) {
     val context = LocalContext.current
     val localDensity = LocalDensity.current
@@ -305,6 +331,7 @@ internal fun ScreenLookupOverlay(
                 showTapHint = true
             }
         }.onFailure {
+            if (it is CancellationException) throw it
             error = it.message ?: context.contextStringResource(MR.strings.screen_lookup_capture_failed)
         }
         isLoading = false
@@ -322,6 +349,15 @@ internal fun ScreenLookupOverlay(
         val widthPx = with(localDensity) { maxWidth.toPx() }
         val heightPx = with(localDensity) { maxHeight.toPx() }
 
+        if (showOriginalSnapshot) {
+            Image(
+                bitmap = screenshot.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds,
+            )
+        }
+
         OcrBlockCanvas(
             blocks = blocks,
             boxScaleX = boxScaleX,
@@ -330,6 +366,8 @@ internal fun ScreenLookupOverlay(
             activeMatchCount = matchedCharCount,
             activeMatchOffset = matchOffset,
             selection = selection,
+            forgivingTaps = showOriginalSnapshot,
+            allowEmptyTap = !showOriginalSnapshot || !isLoading,
             onBlockTapped = { tapped, tapX, tapY ->
                 val charOffset = tapped.screenLookupCharOffset(tapX, tapY)
                 val text = tapped.fullText
@@ -365,8 +403,12 @@ internal fun ScreenLookupOverlay(
                 }
             },
             onEmptyTap = {
-                selection = null
-                showTapHint = false
+                if (dismissOnEmptyTap) {
+                    onClose()
+                } else {
+                    selection = null
+                    showTapHint = false
+                }
             },
         )
 
@@ -414,7 +456,9 @@ internal fun ScreenLookupOverlay(
                     lookupString = selected.lookupString,
                     fullText = selected.sentence,
                     charOffset = selected.sentenceOffset,
-                    onDismiss = { selection = null },
+                    onDismiss = {
+                        if (dismissOnEmptyTap) onClose() else selection = null
+                    },
                     webView = webView,
                     repository = repository,
                     anchorX = selected.anchorX,
@@ -435,6 +479,17 @@ internal fun ScreenLookupOverlay(
                         matchOffset = off
                     },
                 )
+            }
+        }
+
+        if (showOriginalSnapshot) {
+            // Non-focusable windows deliberately do not handle Android Back: it belongs
+            // to Google. Always provide a local exit, including during OCR/loading/errors.
+            FilledTonalButton(
+                onClick = onClose,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 48.dp, end = 12.dp),
+            ) {
+                Text("Close OCR")
             }
         }
     }

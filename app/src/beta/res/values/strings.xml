@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Personal preview branding only. Keep the original Chimahon release unchanged. -->
+    <string name="app_name" translatable="false">Chimahon OCR Fork</string>
+    <string name="scroll_translate_lookup_description" translatable="false">Chimahon OCR Fork: floating original-text OCR and dictionary lookup (Android 14+). Tap the floating OCR button to capture the underlying app window while Google Scroll and Translate remains active. Tap original text for definitions; tap well away from text or Close OCR to leave. Long-press the floating button to hide it; open Screen OCR in Chimahon OCR Fork to restore it. Normal screen taps and scrolling are not intercepted. Captures are held in memory; the selected OCR engine may use the network. Disable this service here to stop.</string>
+</resources>

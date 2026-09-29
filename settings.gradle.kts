@@ -11,7 +11,7 @@ pluginManagement {
         gradlePluginPortal()
         google()
         mavenCentral()
-        maven(url = "https://www.jitpack.io")
+        maven(url = "https://jitpack.io")
     }
 }
 
@@ -34,7 +34,7 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         google()
-        maven(url = "https://www.jitpack.io")
+        maven(url = "https://jitpack.io")
     }
 }
 
@@ -64,7 +64,7 @@ include(":macrobenchmark")
 include(":presentation-core")
 include(":presentation-widget")
 include(":source-api")
-
+include(":flexible-adapter-compat")
 
 include(":source-local")
 val hasLocalOcr = file("chimahon-local-ocr/build.gradle.kts").exists()

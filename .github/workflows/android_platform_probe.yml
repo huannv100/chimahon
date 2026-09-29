@@ -1,0 +1,47 @@
+name: Android platform integration probe
+on:
+  pull_request:
+    paths:
+      - 'qa/android/**'
+      - 'app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScrollLookupPolicy.kt'
+      - 'app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScrollTranslateLookupAccessibilityService.kt'
+      - '.github/workflows/android_platform_probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  platform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
+      - name: Compile production service in isolated Android fixtures
+        run: ./gradlew -p qa/android assembleDebug --console=plain
+      - name: Enable emulator KVM access
+        run: sudo chmod 666 /dev/kvm
+      - name: Test native tap routing and original-window capture
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save
+          script: python3 qa/android/verify.py
+      - name: Upload platform diagnostics (no APKs)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-platform-diagnostics
+          path: android-probe-*.txt
+          if-no-files-found: ignore

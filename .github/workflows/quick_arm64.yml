@@ -62,14 +62,18 @@ jobs:
           assert "versionCode='24607'" in text, 'Unexpected version code'
           labels = re.findall(r"^application-label[^:]*:'(.*)'$", text, re.M)
           assert labels and all(label == 'Huan OCR' for label in labels), labels
-          assert re.search(r"^launchable-activity:.* label='Huan OCR'", text, re.M), 'Launcher label differs'
+          # aapt prints an empty activity label when Android inherits the application label.
+          launcher = re.search(r"^launchable-activity:.* label='([^']*)'", text, re.M)
+          assert launcher and launcher.group(1) in ('', 'Huan OCR'), 'Launcher label differs'
           ns = '{http://schemas.android.com/apk/res/android}'
           manifest = ET.parse('app/src/main/AndroidManifest.xml').getroot()
           app = manifest.find('application')
           assert app.get(ns + 'label') == '@string/app_name'
+          main = next(a for a in app.findall('activity') if a.get(ns + 'name', '').endswith('.ui.main.MainActivity'))
+          assert main.get(ns + 'label') in (None, '@string/app_name'), 'Unexpected launcher override'
           service = next(s for s in app.findall('service') if s.get(ns + 'name', '').endswith('.ScrollTranslateLookupAccessibilityService'))
           assert service.get(ns + 'label') == '@string/app_name'
-          print('PASS: Huan OCR app/launcher label in every packaged locale; accessibility uses the same label.')
+          print('PASS: Huan OCR app label in every packaged locale; launcher and accessibility use the same label.')
           print('PASS: app.chimahon.beta retained; versionCode 24607; APK signature verified.')
           PY
       - name: Run app unit tests including forgiving taps and long press

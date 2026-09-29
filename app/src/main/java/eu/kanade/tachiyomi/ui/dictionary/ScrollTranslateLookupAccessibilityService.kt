@@ -121,6 +121,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        activeInstance = this
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             message("Scroll Translate lookup requires Android 14 or later.")
             disableSelf()
@@ -390,7 +391,18 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         Toast.makeText(this, text, Toast.LENGTH_LONG).show()
     }
 
+    private fun triggerManualLookup() {
+        if (!operational || locked() || session.state != ScrollLookupSession.State.IDLE) return
+        refreshWindows()
+        val target = targets.firstOrNull() ?: run {
+            message("No capturable app window found.")
+            return
+        }
+        captureOriginal(target)
+    }
+
     private fun shutdown() {
+        if (activeInstance === this) activeInstance = null
         operational = false
         setRouting(false)
         session.reset()
@@ -407,8 +419,17 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     private data class CaptureTarget(val id: Int, val bounds: Rect, val display: Rect)
 
-    private companion object {
-        const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
+    companion object {
+        @Volatile
+        private var activeInstance: ScrollTranslateLookupAccessibilityService? = null
+
+        fun requestManualLookup(): Boolean {
+            val service = activeInstance ?: return false
+            service.handler.post { service.triggerManualLookup() }
+            return true
+        }
+
+        private const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
         val EXCLUDED_PACKAGES = setOf(
             GOOGLE_PACKAGE,
             "android",

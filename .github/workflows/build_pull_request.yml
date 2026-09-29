@@ -34,8 +34,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Dependency Review
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      # Dependency Review is skipped in this personal fork because the
+      # repository-level Dependency Graph feature is not enabled.
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0

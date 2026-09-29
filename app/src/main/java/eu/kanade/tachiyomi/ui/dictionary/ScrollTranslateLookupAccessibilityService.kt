@@ -134,6 +134,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         )
         touchController = getTouchInteractionController(Display.DEFAULT_DISPLAY)
         touchController?.registerCallback(mainExecutor, touchCallback)
+        message("Chimahon lookup ready: swipe normally, tap content for original OCR.")
         scheduleRefresh()
     }
 
@@ -214,7 +215,10 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                 warnedConflict = true
                 message("Lookup touch gestures are disabled while another touch-exploration service is active.")
             }
-            val wanted = googleVisible && targets.isNotEmpty() && !keyboardVisible && !locked() &&
+            // Enabling this accessibility service is the explicit opt-in switch.
+            // Do not require Google's overlay to expose a recognizable accessibility window:
+            // Samsung/Google builds can represent Circle to Search differently.
+            val wanted = targets.isNotEmpty() && !keyboardVisible && !locked() &&
                 !competingService && session.state == ScrollLookupSession.State.IDLE &&
                 SystemClock.uptimeMillis() >= blockedUntil
             setRouting(wanted)
@@ -244,7 +248,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun eligibleTarget(x: Float, y: Float): CaptureTarget? {
-        if (!routing || keyboardVisible || locked() || !googleVisible ||
+        if (!routing || keyboardVisible || locked() ||
             session.state != ScrollLookupSession.State.IDLE
         ) return null
         val target = targets.firstOrNull { it.bounds.contains(x.toInt(), y.toInt()) } ?: return null

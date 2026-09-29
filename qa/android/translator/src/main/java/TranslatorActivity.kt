@@ -13,9 +13,9 @@ import android.widget.TextView
 class TranslatorActivity : Activity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        val wm = requireNotNull(getSystemService(WindowManager::class.java))
+        val wm = requireNotNull(applicationContext.getSystemService(WindowManager::class.java))
         val bounds = wm.currentWindowMetrics.bounds
-        val overlay = TextView(this).apply {
+        val overlay = TextView(applicationContext).apply {
             text = "Synthetic translated text"
             contentDescription = "Synthetic translated surface"
             textSize = 22f

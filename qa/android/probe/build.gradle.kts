@@ -8,8 +8,18 @@ val prepareProduction by tasks.registering {
     doLast {
         val destination = generated.get().asFile.apply { mkdirs() }
         listOf("ScrollLookupPolicy.kt", "ScrollTranslateLookupAccessibilityService.kt").forEach { name ->
-            val source = File(production, name).readText()
-            File(destination, name).writeText(source.replace("com.google.android.googlequicksearchbox", "org.chimahon.qa.translator"))
+            var source = File(production, name).readText()
+                .replace("com.google.android.googlequicksearchbox", "org.chimahon.qa.translator")
+            if (name.endsWith("AccessibilityService.kt")) {
+                // Diagnostics only. Do not alter production gesture/capture decisions.
+                source = source.replace("        operational = true", "        operational = true\n        android.util.Log.i(\"ScrollProbe\", \"SERVICE_CONNECTED\")")
+                    .replace("        override fun onMotionEvent(event: MotionEvent) {", "        override fun onMotionEvent(event: MotionEvent) {\n            android.util.Log.i(\"ScrollProbe\", \"MOTION \${event.actionMasked} routing=\$routing targets=\${targets.size}\")")
+                    .replace("        override fun onStateChanged(state: Int) {", "        override fun onStateChanged(state: Int) {\n            android.util.Log.i(\"ScrollProbe\", \"STATE \$state pending=\${pendingTarget != null}\")")
+                    .replace("            setRouting(wanted)", "            if (wanted != routing) android.util.Log.i(\"ScrollProbe\", \"ROUTING \$wanted google=\$googleVisible targets=\${targets.size} protected=\${protectedWindows.size}\")\n            setRouting(wanted)")
+                    .replace("    private fun captureOriginal(target: CaptureTarget) {", "    private fun captureOriginal(target: CaptureTarget) {\n        android.util.Log.i(\"ScrollProbe\", \"CAPTURE_START \${target.id}\")")
+                    .replace("    private fun message(text: String) {", "    private fun message(text: String) {\n        android.util.Log.i(\"ScrollProbe\", \"MESSAGE \$text\")")
+            }
+            File(destination, name).writeText(source)
         }
     }
 }

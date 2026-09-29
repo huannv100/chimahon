@@ -6,14 +6,14 @@ import time
 
 
 def adb(*args):
-    return subprocess.check_output(["adb", *map(str, args)], text=True, timeout=30)
+    return subprocess.check_output(["adb", *map(str, args)], text=True, timeout=30, stderr=subprocess.STDOUT)
 
 
 def logs():
     return adb("logcat", "-d", "-s", "ScrollProbe:I", "AndroidRuntime:E", "*:S")
 
 
-def until(predicate, description, seconds=12):
+def until(predicate, description, seconds=15):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if predicate(logs()):
@@ -23,27 +23,44 @@ def until(predicate, description, seconds=12):
     raise AssertionError(description + "\n" + logs())
 
 
+def start(component):
+    result = adb("shell", "am", "start", "-W", "-n", component)
+    print(result, flush=True)
+    assert "Error" not in result and "Status: ok" in result, result
+
+
 service = "org.chimahon.qa.probe/eu.kanade.tachiyomi.ui.dictionary.ScrollTranslateLookupAccessibilityService"
 try:
-    for name in ("fixture", "translator", "probe"):
-        apk = pathlib.Path("qa/android") / name / "build/outputs/apk/debug" / (name + "-debug.apk")
-        print(adb("install", "-r", apk))
+    adb("logcat", "-c")
+    # Complete emulator setup before changing test-only secure settings.
+    adb("shell", "settings", "put", "global", "device_provisioned", "1")
+    adb("shell", "settings", "put", "secure", "user_setup_complete", "1")
     adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
     adb("shell", "wm", "dismiss-keyguard")
+    for name in ("fixture", "translator", "probe"):
+        apk = pathlib.Path("qa/android") / name / "build/outputs/apk/debug" / (name + "-debug.apk")
+        print(adb("install", "-r", apk), flush=True)
+    start("org.chimahon.qa.probe/.ProbeSetupActivity")
+    time.sleep(2)
     adb("shell", "settings", "put", "secure", "enabled_accessibility_services", service)
     adb("shell", "settings", "put", "secure", "accessibility_enabled", "1")
+    print(adb("shell", "settings", "get", "secure", "enabled_accessibility_services"), flush=True)
+    until(lambda text: "SERVICE_CONNECTED" in text, "test accessibility service actually connected")
     adb("shell", "appops", "set", "org.chimahon.qa.translator", "SYSTEM_ALERT_WINDOW", "allow")
-    adb("shell", "am", "start", "-W", "-n", "org.chimahon.qa.fixture/.FixtureActivity")
-    adb("shell", "am", "start", "-W", "-n", "org.chimahon.qa.translator/.TranslatorActivity")
-    adb("shell", "am", "start", "-W", "-n", "org.chimahon.qa.fixture/.FixtureActivity")
-    time.sleep(2)
+    print(adb("shell", "appops", "get", "org.chimahon.qa.translator", "SYSTEM_ALERT_WINDOW"), flush=True)
+    start("org.chimahon.qa.fixture/.FixtureActivity")
+    start("org.chimahon.qa.translator/.TranslatorActivity")
+    until(lambda text: "TRANSLATION_READY" in text, "synthetic translation overlay exists")
+    start("org.chimahon.qa.fixture/.FixtureActivity")
+    until(lambda text: "ROUTING true" in text, "production controller armed over fixture window")
     width, height = map(int, re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))[-1])
-    adb("logcat", "-c")
     # Right-hand strip is uncovered by the synthetic translation window.
     adb("shell", "input", "swipe", int(width * .85), int(height * .8), int(width * .85), int(height * .3), 500)
     until(lambda text: "SCROLL " in text, "native swipe reaches original app")
     assert "OPEN " not in logs(), "Swipe must not open lookup"
+    assert "MOTION " in logs(), "Swipe must have gone through the production touch controller"
     print("PASS: swipe does not trigger lookup", flush=True)
+    time.sleep(1)
     for cycle in range(3):
         adb("shell", "input", "tap", width // 2, height // 2)
         until(lambda text: text.count("OPEN pixel=") == cycle + 1, f"tap opens lookup (cycle {cycle + 1})")
@@ -61,6 +78,14 @@ try:
     until(lambda text: "APP_CLICK" in text, "normal app taps recover after disabling service")
     print("ANDROID PLATFORM PROBE PASSED", flush=True)
 finally:
-    pathlib.Path("android-probe-logcat.txt").write_text(adb("logcat", "-d"))
-    pathlib.Path("android-probe-accessibility.txt").write_text(adb("shell", "dumpsys", "accessibility"))
-    pathlib.Path("android-probe-windows.txt").write_text(adb("shell", "dumpsys", "window", "windows"))
+    for name, args in {
+        "logcat": ("logcat", "-d"),
+        "accessibility": ("shell", "dumpsys", "accessibility"),
+        "windows": ("shell", "dumpsys", "window", "windows"),
+        "packages": ("shell", "dumpsys", "package", "org.chimahon.qa.probe"),
+    }.items():
+        text = adb(*args)
+        pathlib.Path(f"android-probe-{name}.txt").write_text(text)
+        if name == "accessibility":
+            print(text, flush=True)
+    print(logs(), flush=True)

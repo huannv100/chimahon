@@ -31,12 +31,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Clone repo and native dictionary submodule
+      - name: Clone repo and pinned native/adapter sources
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
           submodules: recursive
           persist-credentials: false
+          show-progress: false
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92
       - name: Set up JDK
@@ -47,15 +48,22 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
       - name: Build installable preview
-        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-scroll-lookup.2 -PreleaseVersionCode=24602 --stacktrace
+        run: |
+          ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-scroll-lookup.3 -PreleaseVersionCode=24603 --console=plain > build-output.log 2>&1 || { tail -n 150 build-output.log; exit 1; }
+          tail -n 25 build-output.log
       - name: Run unit tests including tap and capture policy
-        run: ./gradlew :app:testReleaseUnitTest --stacktrace
-      - name: Upload test reports
+        run: |
+          ./gradlew :app:testReleaseUnitTest --console=plain > unit-test-output.log 2>&1 || { tail -n 150 unit-test-output.log; exit 1; }
+          tail -n 30 unit-test-output.log
+      - name: Upload test reports and full logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: test-reports-${{ github.sha }}
-          path: app/build/reports/tests/
+          name: test-reports-and-logs-${{ github.sha }}
+          path: |
+            app/build/reports/tests/
+            build-output.log
+            unit-test-output.log
           if-no-files-found: ignore
       - name: Upload arm64 APK after successful build and tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

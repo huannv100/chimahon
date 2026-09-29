@@ -1,4 +1,6 @@
 [submodule "chimahon/src/main/cpp/hoshidicts"]
 	path = chimahon/src/main/cpp/hoshidicts
 	url = https://github.com/Chimahon/hoshidicts
-	branch = main
+[submodule "vendor/FlexibleAdapter"]
+	path = vendor/FlexibleAdapter
+	url = https://github.com/arkon/FlexibleAdapter

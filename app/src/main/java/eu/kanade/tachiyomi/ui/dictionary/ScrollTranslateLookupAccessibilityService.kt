@@ -14,6 +14,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.MotionEvent
@@ -44,6 +45,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private var pendingTarget: CaptureTarget? = null
     private var targets = emptyList<CaptureTarget>()
     private var googleControls = emptyList<Rect>()
+    private var protectedWindows = emptyList<Rect>()
     private var googleVisible = false
     private var keyboardVisible = false
     private var blockedUntil = 0L
@@ -124,6 +126,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
             return
         }
         operational = true
+        // Clear platform flags left over from an interrupted service instance.
+        setRouting(false)
         policy = ScrollLookupTapPolicy(
             ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
             ViewConfiguration.getLongPressTimeout().toLong(),
@@ -170,12 +174,21 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     private fun refreshWindows() {
         runCatching {
-            val wm = getSystemService(WindowManager::class.java)
+            val wm = requiredService<WindowManager>()
             val displayBounds = wm.currentWindowMetrics.bounds
             val currentWindows = windows.filter { it.displayId == Display.DEFAULT_DISPLAY }
             val googleWindows = currentWindows.filter { windowPackage(it) == GOOGLE_PACKAGE }
             googleVisible = googleWindows.isNotEmpty()
             keyboardVisible = currentWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            protectedWindows = currentWindows.mapNotNull { window ->
+                val owner = windowPackage(window)
+                if (owner == GOOGLE_PACKAGE || owner == packageName) return@mapNotNull null
+                val protected = window.type == AccessibilityWindowInfo.TYPE_SYSTEM ||
+                    window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+                    owner in EXCLUDED_PACKAGES
+                if (!protected) return@mapNotNull null
+                Rect().also { window.getBoundsInScreen(it) }.takeUnless { it.isEmpty }
+            }
             targets = currentWindows.sortedByDescending { it.layer }.mapNotNull { window ->
                 val owner = windowPackage(window) ?: return@mapNotNull null
                 if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION ||
@@ -191,7 +204,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                 pendingTarget = null
                 overlay?.dismiss()
             }
-            val competingService = getSystemService(AccessibilityManager::class.java)
+            val competingService = requiredService<AccessibilityManager>()
                 .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
                 .any {
                     it.resolveInfo.serviceInfo.name != javaClass.name &&
@@ -240,7 +253,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         val screen = target.display
         if (x < screen.left + edge || x >= screen.right - edge ||
             y < screen.top + bar || y >= screen.bottom - bar ||
-            googleControls.any { it.contains(x.toInt(), y.toInt()) }
+            googleControls.any { it.contains(x.toInt(), y.toInt()) } ||
+            protectedWindows.any { it.contains(x.toInt(), y.toInt()) }
         ) return null
         return target
     }
@@ -256,8 +270,9 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun setRouting(enabled: Boolean) {
-        if (enabled == routing) return
         val info = serviceInfo ?: return
+        val platformEnabled = info.flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE != 0
+        if (enabled == routing && enabled == platformEnabled) return
         info.flags = if (enabled) {
             info.flags or AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE
         } else {
@@ -285,7 +300,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                     try {
                         if (!operational || !session.isPending(ticket)) return
                         refreshWindows()
-                        if (locked() || targets.none { it == target }) {
+                        if (locked() || targets.firstOrNull { Rect.intersects(it.bounds, target.bounds) } != target) {
                             captureFailed(ticket, "The app or orientation changed; tap again.")
                             return
                         }
@@ -313,7 +328,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                         }
                         val controller = overlay ?: ScreenLookupOverlayController(
                             context = this@ScrollTranslateLookupAccessibilityService,
-                            windowManager = getSystemService(WindowManager::class.java),
+                            windowManager = requiredService<WindowManager>(),
                             onDismiss = {
                                 session.reset()
                                 blockedUntil = SystemClock.uptimeMillis() + 250
@@ -351,7 +366,12 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         handler.postDelayed({ scheduleRefresh() }, 610)
     }
 
-    private fun locked(): Boolean = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+    private fun locked(): Boolean =
+        requiredService<KeyguardManager>().isKeyguardLocked ||
+            !requiredService<PowerManager>().isInteractive
+
+    private inline fun <reified T : Any> requiredService(): T =
+        requireNotNull(getSystemService(T::class.java)) { "Missing Android service: ${T::class.java.simpleName}" }
 
     private fun message(text: String) {
         Toast.makeText(this, text, Toast.LENGTH_LONG).show()

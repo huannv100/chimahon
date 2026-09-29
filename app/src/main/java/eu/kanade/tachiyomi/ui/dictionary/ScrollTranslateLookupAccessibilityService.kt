@@ -50,6 +50,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private var keyboardVisible = false
     private var blockedUntil = 0L
     private var warnedConflict = false
+    private var armedNotified = false
+    private val windowOwners = mutableMapOf<Int, String>()
 
     private val holdTimeout = Runnable {
         if (policy?.timeout() == ScrollLookupTapPolicy.Decision.DELEGATE) delegateGesture()
@@ -139,6 +141,13 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        val owner = event.packageName?.toString()
+        if (owner != null && event.windowId >= 0) {
+            windowOwners[event.windowId] = owner
+            if (windowOwners.size > 64) {
+                windowOwners.keys.firstOrNull()?.let(windowOwners::remove)
+            }
+        }
         if (operational) scheduleRefresh()
     }
 
@@ -228,7 +237,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun windowPackage(window: AccessibilityWindowInfo): String? = window.root?.packageName?.toString()
+    private fun windowPackage(window: AccessibilityWindowInfo): String? =
+        window.root?.packageName?.toString() ?: windowOwners[window.id]
 
     private fun smallClickableBounds(root: AccessibilityNodeInfo?, display: Rect): List<Rect> {
         if (root == null) return emptyList()
@@ -284,6 +294,10 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         }
         serviceInfo = info
         routing = enabled
+        if (enabled && !armedNotified) {
+            armedNotified = true
+            message("Chimahon lookup armed. Tap content for original OCR; swipes stay normal.")
+        }
         if (!enabled) {
             handler.removeCallbacks(holdTimeout)
             policy?.cancel()
@@ -393,6 +407,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         touchController = null
         overlay?.release()
         overlay = null
+        windowOwners.clear()
     }
 
     private data class CaptureTarget(val id: Int, val bounds: Rect, val display: Rect)

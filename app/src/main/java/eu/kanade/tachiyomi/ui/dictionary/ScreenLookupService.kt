@@ -132,7 +132,6 @@ class ScreenLookupService : Service() {
                 ScreenLookupTileService.requestUpdate(this)
             }
             ACTION_CAPTURE -> captureFromButton()
-            ACTION_CAPTURE_AFTER_REVEAL -> captureAfterOriginalReveal()
             ACTION_SHOW_BUTTON -> setFloatingButtonVisible(true)
             ACTION_STOP -> stopSelf()
         }
@@ -287,35 +286,6 @@ class ScreenLookupService : Service() {
             setFloatingButtonVisible(false)
             try {
                 val bitmap = captureWithProjection()
-                if (bitmap == null) {
-                    toastCaptureFailed()
-                    return@launch
-                }
-                showLookupOverlay(bitmap)
-            } finally {
-                setFloatingButtonVisible(true)
-            }
-        }
-    }
-
-    private fun captureAfterOriginalReveal() {
-        if (overlayController?.isShowing == true || captureJob?.isActive == true) return
-
-        captureJob = scope.launch {
-            setFloatingButtonVisible(false)
-            try {
-                // The real tap has already been handled by Google's Scroll Translate.
-                // Give it a short moment to reveal the original, then grab a fresh frame.
-                runCatching { imageReader?.acquireLatestImage()?.close() }
-                delay(ORIGINAL_REVEAL_DELAY_MS)
-                val bitmap = withContext(Dispatchers.Default) {
-                    runCatching { acquireBitmap() }
-                        .onFailure { e ->
-                            lastCaptureError = e.message
-                            logcat(LogPriority.ERROR, e) { "capture after Scroll Translate reveal failed" }
-                        }
-                        .getOrNull()
-                }
                 if (bitmap == null) {
                     toastCaptureFailed()
                     return@launch
@@ -609,7 +579,6 @@ class ScreenLookupService : Service() {
         private const val ACTION_STOP = "eu.kanade.tachiyomi.dictionary.SCREEN_LOOKUP_STOP"
         private const val ACTION_SHOW_BUTTON = "eu.kanade.tachiyomi.dictionary.SCREEN_LOOKUP_SHOW_BUTTON"
         private const val ACTION_CAPTURE = "eu.kanade.tachiyomi.dictionary.SCREEN_LOOKUP_CAPTURE"
-        private const val ACTION_CAPTURE_AFTER_REVEAL = "eu.kanade.tachiyomi.dictionary.SCREEN_LOOKUP_CAPTURE_AFTER_REVEAL"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
         private const val NOTIFICATION_ID = 320_420
@@ -617,7 +586,6 @@ class ScreenLookupService : Service() {
         private const val BUTTON_ALPHA = 0.92f
         private const val IMAGE_TIMEOUT_MS = 1_500L
         private const val HIDE_BUTTON_DELAY_MS = 250L
-        private const val ORIGINAL_REVEAL_DELAY_MS = 120L
 
         fun start(context: Context, resultCode: Int, resultData: Intent) {
             val intent = Intent(context, ScreenLookupService::class.java)
@@ -642,12 +610,6 @@ class ScreenLookupService : Service() {
         fun capture(context: Context) {
             context.startService(
                 Intent(context, ScreenLookupService::class.java).setAction(ACTION_CAPTURE),
-            )
-        }
-
-        fun captureAfterOriginalReveal(context: Context) {
-            context.startService(
-                Intent(context, ScreenLookupService::class.java).setAction(ACTION_CAPTURE_AFTER_REVEAL),
             )
         }
     }

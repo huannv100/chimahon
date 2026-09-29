@@ -11,6 +11,21 @@ permissions:
   contents: read
 
 jobs:
+  policy:
+    name: Gesture and capture-state regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
+      - name: Compile and execute production gesture policy
+        run: ./gradlew -p qa/policy run --console=plain
+
   format:
     name: Repository formatting
     runs-on: ubuntu-24.04
@@ -38,6 +53,10 @@ jobs:
           submodules: recursive
           persist-credentials: false
           show-progress: false
+      - name: Remove unused legacy vendor build launcher
+        run: |
+          # Only vendor Java/resources are used. Never execute its old wrapper.
+          rm -f vendor/FlexibleAdapter/gradle/wrapper/gradle-wrapper.jar vendor/FlexibleAdapter/gradlew vendor/FlexibleAdapter/gradlew.bat
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92
       - name: Set up JDK

@@ -5,10 +5,12 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.TouchInteractionController
 import android.app.KeyguardManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Build
@@ -20,10 +22,19 @@ import android.view.Display
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.Gravity
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.core.content.ContextCompat
+import eu.kanade.tachiyomi.R
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import kotlin.math.roundToInt
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.Toast
 
 /**
@@ -50,6 +61,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private var keyboardVisible = false
     private var blockedUntil = 0L
     private var warnedConflict = false
+    private var floatingButton: View? = null
+    private var floatingButtonParams: WindowManager.LayoutParams? = null
     private val windowOwners = mutableMapOf<Int, String>()
 
     private val holdTimeout = Runnable {
@@ -121,7 +134,6 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        activeInstance = this
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             message("Scroll Translate lookup requires Android 14 or later.")
             disableSelf()
@@ -138,6 +150,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         touchController = getTouchInteractionController(Display.DEFAULT_DISPLAY)
         touchController?.registerCallback(mainExecutor, touchCallback)
         message("Chimahon lookup service ready. Screen touch remains fully normal.")
+        showFloatingButton()
         scheduleRefresh()
     }
 
@@ -391,6 +404,121 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         Toast.makeText(this, text, Toast.LENGTH_LONG).show()
     }
 
+    private fun showFloatingButton() {
+        if (floatingButton != null) return
+        val wm = requiredService<WindowManager>()
+        val size = buttonSizeDp().dp
+        val backgroundColor = buttonBackgroundColor()
+        val button = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(backgroundColor)
+            }
+            elevation = 8.dp.toFloat()
+            alpha = buttonAlpha()
+            contentDescription = "Screen OCR"
+            addView(
+                ImageView(this@ScrollTranslateLookupAccessibilityService).apply {
+                    setImageResource(R.drawable.ic_chimahon)
+                    imageTintList = ColorStateList.valueOf(buttonIconColor(backgroundColor))
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    setPadding(14.dp, 14.dp, 14.dp, 14.dp)
+                },
+                FrameLayout.LayoutParams(size, size),
+            )
+        }
+
+        val bounds = wm.currentWindowMetrics.bounds
+        val params = WindowManager.LayoutParams(
+            size,
+            size,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = bounds.width() - size - 16.dp
+            y = (bounds.height() * 0.42f).roundToInt()
+        }
+
+        button.installDragHandler(params)
+        floatingButton = button
+        floatingButtonParams = params
+        wm.addView(button, params)
+    }
+
+    private fun View.installDragHandler(params: WindowManager.LayoutParams) {
+        val wm = requiredService<WindowManager>()
+        val touchSlop = 8.dp
+        var downRawX = 0f
+        var downRawY = 0f
+        var startX = 0
+        var startY = 0
+        var moved = false
+
+        setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startX = params.x
+                    startY = params.y
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downRawX).roundToInt()
+                    val dy = (event.rawY - downRawY).roundToInt()
+                    moved = moved || kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop
+                    val bounds = wm.currentWindowMetrics.bounds
+                    params.x = (startX + dx).coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+                    params.y = (startY + dy).coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+                    runCatching { wm.updateViewLayout(this, params) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) triggerManualLookup()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun removeFloatingButton() {
+        val wm = getSystemService(WindowManager::class.java)
+        floatingButton?.let { view -> runCatching { wm?.removeView(view) } }
+        floatingButton = null
+        floatingButtonParams = null
+    }
+
+    private fun buttonSizeDp(): Int = runCatching {
+        Injekt.get<DictionaryPreferences>().ocrButtonSize().get()
+    }.getOrDefault(56)
+
+    private fun buttonAlpha(): Float = runCatching {
+        Injekt.get<DictionaryPreferences>().ocrButtonAlpha().get()
+    }.getOrDefault(0.92f)
+
+    private fun buttonBackgroundColor(): Int {
+        val stored = runCatching {
+            Injekt.get<DictionaryPreferences>().ocrButtonColor().get()
+        }.getOrDefault(0)
+        return if (stored != 0) stored else ContextCompat.getColor(this, R.color.tachiyomi_primary)
+    }
+
+    private fun buttonIconColor(background: Int): Int {
+        val luminance = 0.299 * Color.red(background) +
+            0.587 * Color.green(background) +
+            0.114 * Color.blue(background)
+        return if (luminance < 128) Color.WHITE else Color.BLACK
+    }
+
+    private val Int.dp: Int
+        get() = (this * resources.displayMetrics.density).roundToInt()
+
     private fun triggerManualLookup() {
         if (!operational || locked() || session.state != ScrollLookupSession.State.IDLE) return
         refreshWindows()
@@ -402,7 +530,6 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun shutdown() {
-        if (activeInstance === this) activeInstance = null
         operational = false
         setRouting(false)
         session.reset()
@@ -414,22 +541,14 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         touchController = null
         overlay?.release()
         overlay = null
+        removeFloatingButton()
         windowOwners.clear()
     }
 
     private data class CaptureTarget(val id: Int, val bounds: Rect, val display: Rect)
 
-    companion object {
-        @Volatile
-        private var activeInstance: ScrollTranslateLookupAccessibilityService? = null
-
-        fun requestManualLookup(): Boolean {
-            val service = activeInstance ?: return false
-            service.handler.post { service.triggerManualLookup() }
-            return true
-        }
-
-        private const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
+    private companion object {
+        const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
         val EXCLUDED_PACKAGES = setOf(
             GOOGLE_PACKAGE,
             "android",

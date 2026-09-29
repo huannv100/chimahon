@@ -20,6 +20,14 @@ class ScreenLookupTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+
+        // When the Scroll Translate accessibility integration is enabled,
+        // this tile becomes a safe manual ORIGINAL OCR trigger. It does not
+        // request global touch exploration and therefore cannot block scrolling.
+        if (ScrollTranslateLookupAccessibilityService.requestManualLookup()) {
+            return
+        }
+
         if (ScreenLookupServiceState.isRunning.value) {
             ScreenLookupService.stop(this)
             updateTile(active = false)

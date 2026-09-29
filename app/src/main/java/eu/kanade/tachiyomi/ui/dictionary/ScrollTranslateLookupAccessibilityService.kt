@@ -50,7 +50,6 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private var keyboardVisible = false
     private var blockedUntil = 0L
     private var warnedConflict = false
-    private var armedNotified = false
     private val windowOwners = mutableMapOf<Int, String>()
 
     private val holdTimeout = Runnable {
@@ -128,7 +127,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
             return
         }
         operational = true
-        // Clear platform flags left over from an interrupted service instance.
+        // Samsung/One UI can trap all touch when touch-exploration routing is enabled.
+        // Keep this service passive by default; never request touch exploration here.
         setRouting(false)
         policy = ScrollLookupTapPolicy(
             ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
@@ -136,7 +136,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         )
         touchController = getTouchInteractionController(Display.DEFAULT_DISPLAY)
         touchController?.registerCallback(mainExecutor, touchCallback)
-        message("Chimahon lookup ready: swipe normally, tap content for original OCR.")
+        message("Chimahon lookup service ready. Screen touch remains fully normal.")
         scheduleRefresh()
     }
 
@@ -227,10 +227,9 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
             // Enabling this accessibility service is the explicit opt-in switch.
             // Do not require Google's overlay to expose a recognizable accessibility window:
             // Samsung/Google builds can represent Circle to Search differently.
-            val wanted = targets.isNotEmpty() && !keyboardVisible && !locked() &&
-                !competingService && session.state == ScrollLookupSession.State.IDLE &&
-                SystemClock.uptimeMillis() >= blockedUntil
-            setRouting(wanted)
+            // Do not arm global touch routing automatically.
+            // On Samsung/One UI this can block the whole screen.
+            setRouting(false)
         }.onFailure {
             // Fail open: do not leave an invisible touch interceptor active after an error.
             setRouting(false)
@@ -294,10 +293,6 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         }
         serviceInfo = info
         routing = enabled
-        if (enabled && !armedNotified) {
-            armedNotified = true
-            message("Chimahon lookup armed. Tap content for original OCR; swipes stay normal.")
-        }
         if (!enabled) {
             handler.removeCallbacks(holdTimeout)
             policy?.cancel()

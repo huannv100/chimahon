@@ -2,7 +2,6 @@ package eu.kanade.tachiyomi.ui.dictionary
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.accessibilityservice.TouchInteractionController
 import android.app.KeyguardManager
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -10,147 +9,69 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Log
 import android.view.Display
+import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
-import android.view.Gravity
-import android.view.View
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityManager
-import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import eu.kanade.tachiyomi.R
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.math.roundToInt
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.Toast
 
 /**
- * Opt in by enabling this service in Android Accessibility settings (Android 14+).
- * No Google click events, simulated taps, Back actions, or MediaProjection session.
- * Short taps are consumed; Android delegates swipes. Lookup is a modal snapshot.
+ * Original-window OCR from a floating button. No global touch listener, touch exploration,
+ * injected gesture, Google dismissal action, or MediaProjection session.
  */
 class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val session = ScrollLookupSession()
-    private var touchController: TouchInteractionController? = null
-    private var policy: ScrollLookupTapPolicy? = null
     private var overlay: ScreenLookupOverlayController? = null
     private var operational = false
-    private var routing = false
     private var refreshScheduled = false
-    private var delegateRequested = false
-    private var currentTarget: CaptureTarget? = null
-    private var pendingTarget: CaptureTarget? = null
     private var targets = emptyList<CaptureTarget>()
-    private var googleControls = emptyList<Rect>()
-    private var protectedWindows = emptyList<Rect>()
-    private var googleVisible = false
-    private var keyboardVisible = false
     private var blockedUntil = 0L
-    private var warnedConflict = false
+    private var lastDisplayBounds: Rect? = null
     private var floatingButton: View? = null
     private var floatingButtonParams: WindowManager.LayoutParams? = null
-    private val windowOwners = mutableMapOf<Int, String>()
-
-    private val holdTimeout = Runnable {
-        if (policy?.timeout() == ScrollLookupTapPolicy.Decision.DELEGATE) delegateGesture()
-    }
-
-    private val touchCallback = object : TouchInteractionController.Callback {
-        override fun onMotionEvent(event: MotionEvent) {
-            if (!operational) {
-                delegateGesture()
-                return
-            }
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    delegateRequested = false
-                    currentTarget = eligibleTarget(event.x, event.y)
-                    val decision = policy?.down(event.x, event.y, event.eventTime, currentTarget != null)
-                    if (decision == ScrollLookupTapPolicy.Decision.DELEGATE) {
-                        delegateGesture()
-                    } else {
-                        handler.postDelayed(holdTimeout, ViewConfiguration.getLongPressTimeout().toLong())
-                    }
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    // Include batched history: a swipe returning to its start is not a tap.
-                    for (i in 0 until event.historySize) {
-                        if (policy?.move(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalEventTime(i)) ==
-                            ScrollLookupTapPolicy.Decision.DELEGATE
-                        ) delegateGesture()
-                    }
-                    if (policy?.move(event.x, event.y, event.eventTime, event.pointerCount) ==
-                        ScrollLookupTapPolicy.Decision.DELEGATE
-                    ) delegateGesture()
-                }
-                MotionEvent.ACTION_POINTER_DOWN -> {
-                    policy?.cancel()
-                    delegateGesture()
-                }
-                MotionEvent.ACTION_UP -> {
-                    handler.removeCallbacks(holdTimeout)
-                    when (policy?.up(event.x, event.y, event.eventTime)) {
-                        ScrollLookupTapPolicy.Decision.LOOKUP -> pendingTarget = currentTarget
-                        ScrollLookupTapPolicy.Decision.DELEGATE -> delegateGesture()
-                        else -> Unit
-                    }
-                    currentTarget = null
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    handler.removeCallbacks(holdTimeout)
-                    policy?.cancel()
-                    currentTarget = null
-                    pendingTarget = null
-                }
-            }
-        }
-
-        override fun onStateChanged(state: Int) {
-            if (state == TouchInteractionController.STATE_CLEAR) {
-                handler.removeCallbacks(holdTimeout)
-                policy?.cancel()
-                delegateRequested = false
-                val target = pendingTarget
-                pendingTarget = null
-                if (target != null) handler.post { captureOriginal(target) }
-                scheduleRefresh()
-            }
-        }
-    }
+    private val windowOwners = linkedMapOf<Int, String>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            message("Scroll Translate lookup requires Android 14 or later.")
+            message("Original-window OCR requires Android 14 or later.")
             disableSelf()
             return
         }
+        // Clear flags from an older installed test build; never request these modes.
+        serviceInfo?.let { info ->
+            info.flags = info.flags and
+                AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE.inv()
+            serviceInfo = info
+        }
         operational = true
-        // Samsung/One UI can trap all touch when touch-exploration routing is enabled.
-        // Keep this service passive by default; never request touch exploration here.
-        setRouting(false)
-        policy = ScrollLookupTapPolicy(
-            ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
-            ViewConfiguration.getLongPressTimeout().toLong(),
-        )
-        touchController = getTouchInteractionController(Display.DEFAULT_DISPLAY)
-        touchController?.registerCallback(mainExecutor, touchCallback)
-        message("Chimahon lookup service ready. Screen touch remains fully normal.")
+        activeInstance = this
+        // Do not leave the legacy screen-recording OCR session running alongside this one.
+        if (ScreenLookupServiceState.isRunning.value) ScreenLookupService.stop(this)
         showFloatingButton()
+        message("Floating OCR ready. Use the OCR button; screen taps and scrolling are unchanged.")
         scheduleRefresh()
     }
 
@@ -158,15 +79,15 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         val owner = event.packageName?.toString()
         if (owner != null && event.windowId >= 0) {
             windowOwners[event.windowId] = owner
-            if (windowOwners.size > 64) {
-                windowOwners.keys.firstOrNull()?.let(windowOwners::remove)
-            }
+            if (windowOwners.size > 64) windowOwners.remove(windowOwners.keys.first())
         }
         if (operational) scheduleRefresh()
     }
 
     override fun onInterrupt() {
-        shutdown()
+        // This interrupts accessibility feedback, not the service lifecycle. There is no
+        // speech/haptic feedback to stop. Do not destroy the OCR or its floating button.
+        Log.d(TAG, "Feedback interrupted; retaining floating OCR session")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -181,9 +102,6 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        session.reset()
-        pendingTarget = null
-        overlay?.dismiss()
         scheduleRefresh()
     }
 
@@ -198,125 +116,43 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
 
     private fun refreshWindows() {
         runCatching {
-            val wm = requiredService<WindowManager>()
-            val displayBounds = wm.currentWindowMetrics.bounds
-            val currentWindows = windows.filter { it.displayId == Display.DEFAULT_DISPLAY }
-            val googleWindows = currentWindows.filter { windowPackage(it) == GOOGLE_PACKAGE }
-            googleVisible = googleWindows.isNotEmpty()
-            keyboardVisible = currentWindows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            protectedWindows = currentWindows.mapNotNull { window ->
-                val owner = windowPackage(window)
-                if (owner == GOOGLE_PACKAGE || owner == packageName) return@mapNotNull null
-                val protected = window.type == AccessibilityWindowInfo.TYPE_SYSTEM ||
-                    window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
-                    owner in EXCLUDED_PACKAGES
-                if (!protected) return@mapNotNull null
-                Rect().also { window.getBoundsInScreen(it) }.takeUnless { it.isEmpty }
+            val displayBounds = requiredService<WindowManager>().currentWindowMetrics.bounds
+            val previousBounds = lastDisplayBounds
+            lastDisplayBounds = Rect(displayBounds)
+            // A theme/configuration event alone must not close OCR. Only geometry changes
+            // invalidate the captured text coordinates.
+            if (previousBounds != null && previousBounds != displayBounds) {
+                session.reset()
+                overlay?.dismiss()
+                clampFloatingButton()
             }
-            targets = currentWindows.sortedByDescending { it.layer }.mapNotNull { window ->
-                val owner = windowPackage(window) ?: return@mapNotNull null
-                if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION ||
-                    owner == packageName || owner in EXCLUDED_PACKAGES
-                ) return@mapNotNull null
-                val bounds = Rect().also { window.getBoundsInScreen(it) }
-                if (bounds.isEmpty || !Rect.intersects(bounds, displayBounds)) return@mapNotNull null
-                CaptureTarget(window.id, Rect(bounds), Rect(displayBounds))
-            }
-            googleControls = googleWindows.flatMap { smallClickableBounds(it.root, displayBounds) }
+            targets = windows.filter { it.displayId == Display.DEFAULT_DISPLAY }
+                .sortedByDescending { it.layer }.mapNotNull { window ->
+                    val owner = window.root?.packageName?.toString() ?: windowOwners[window.id]
+                        ?: return@mapNotNull null
+                    if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION ||
+                        owner == packageName || owner in EXCLUDED_PACKAGES
+                    ) return@mapNotNull null
+                    val bounds = Rect().also { window.getBoundsInScreen(it) }
+                    if (bounds.isEmpty || !Rect.intersects(bounds, displayBounds)) return@mapNotNull null
+                    CaptureTarget(window.id, Rect(bounds), Rect(displayBounds))
+                }
             if (locked()) {
                 session.reset()
-                pendingTarget = null
                 overlay?.dismiss()
+                floatingButton?.visibility = View.INVISIBLE
+            } else if (overlay?.isShowing != true) {
+                floatingButton?.visibility = View.VISIBLE
             }
-            val competingService = requiredService<AccessibilityManager>()
-                .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-                .any {
-                    it.resolveInfo.serviceInfo.name != javaClass.name &&
-                        it.flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE != 0
-                }
-            if (competingService && !warnedConflict) {
-                warnedConflict = true
-                message("Lookup touch gestures are disabled while another touch-exploration service is active.")
-            }
-            // Enabling this accessibility service is the explicit opt-in switch.
-            // Do not require Google's overlay to expose a recognizable accessibility window:
-            // Samsung/Google builds can represent Circle to Search differently.
-            // Do not arm global touch routing automatically.
-            // On Samsung/One UI this can block the whole screen.
-            setRouting(false)
         }.onFailure {
-            // Fail open: do not leave an invisible touch interceptor active after an error.
-            setRouting(false)
-        }
-    }
-
-    private fun windowPackage(window: AccessibilityWindowInfo): String? =
-        window.root?.packageName?.toString() ?: windowOwners[window.id]
-
-    private fun smallClickableBounds(root: AccessibilityNodeInfo?, display: Rect): List<Rect> {
-        if (root == null) return emptyList()
-        val result = mutableListOf<Rect>()
-        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var count = 0
-        while (queue.isNotEmpty() && count++ < 200) {
-            val node = queue.removeFirst()
-            val bounds = Rect().also { node.getBoundsInScreen(it) }
-            if (node.isVisibleToUser && node.isClickable && !bounds.isEmpty &&
-                bounds.width().toLong() * bounds.height() < display.width().toLong() * display.height() / 5
-            ) result.add(bounds)
-            for (index in 0 until node.childCount) node.getChild(index)?.let { queue.add(it) }
-        }
-        return result
-    }
-
-    private fun eligibleTarget(x: Float, y: Float): CaptureTarget? {
-        if (!routing || keyboardVisible || locked() ||
-            session.state != ScrollLookupSession.State.IDLE
-        ) return null
-        val target = targets.firstOrNull { it.bounds.contains(x.toInt(), y.toInt()) } ?: return null
-        val edge = (24 * resources.displayMetrics.density).toInt()
-        val bar = (48 * resources.displayMetrics.density).toInt()
-        val screen = target.display
-        if (x < screen.left + edge || x >= screen.right - edge ||
-            y < screen.top + bar || y >= screen.bottom - bar ||
-            googleControls.any { it.contains(x.toInt(), y.toInt()) } ||
-            protectedWindows.any { it.contains(x.toInt(), y.toInt()) }
-        ) return null
-        return target
-    }
-
-    private fun delegateGesture() {
-        handler.removeCallbacks(holdTimeout)
-        policy?.cancel()
-        currentTarget = null
-        pendingTarget = null
-        if (delegateRequested) return
-        delegateRequested = true
-        runCatching { touchController?.requestDelegating() }.onFailure { setRouting(false) }
-    }
-
-    private fun setRouting(enabled: Boolean) {
-        val info = serviceInfo ?: return
-        val platformEnabled = info.flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE != 0
-        if (enabled == routing && enabled == platformEnabled) return
-        info.flags = if (enabled) {
-            info.flags or AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE
-        } else {
-            info.flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE.inv()
-        }
-        serviceInfo = info
-        routing = enabled
-        if (!enabled) {
-            handler.removeCallbacks(holdTimeout)
-            policy?.cancel()
+            targets = emptyList()
+            Log.w(TAG, "Unable to inspect app windows", it)
         }
     }
 
     private fun captureOriginal(target: CaptureTarget) {
         if (!operational || locked()) return
         val ticket = session.begin() ?: return
-        setRouting(false)
         handler.postDelayed({
             if (session.isPending(ticket)) captureFailed(ticket, "Screen capture timed out; try again.")
         }, 2000)
@@ -327,8 +163,9 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                     try {
                         if (!operational || !session.isPending(ticket)) return
                         refreshWindows()
-                        if (locked() || targets.firstOrNull { Rect.intersects(it.bounds, target.bounds) } != target) {
-                            captureFailed(ticket, "The app or orientation changed; tap again.")
+                        if (!session.isPending(ticket)) return
+                        if (locked() || targets.none { it == target }) {
+                            captureFailed(ticket, "The app or orientation changed; tap the OCR button again.")
                             return
                         }
                         val hardware = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
@@ -359,17 +196,21 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                             onDismiss = {
                                 session.reset()
                                 blockedUntil = SystemClock.uptimeMillis() + 250
+                                floatingButton?.visibility = if (locked()) View.INVISIBLE else View.VISIBLE
                                 handler.postDelayed({ scheduleRefresh() }, 260)
                             },
                             windowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                             showOriginalSnapshot = true,
                             dismissOnEmptyTap = true,
                         ).also { overlay = it }
+                        floatingButton?.visibility = View.INVISIBLE
                         controller.show(frame)
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Original capture/overlay failed", error)
                         overlay?.dismiss()
                         session.reset()
-                        message("Original capture failed. Protected screens cannot be captured.")
+                        floatingButton?.visibility = if (locked()) View.INVISIBLE else View.VISIBLE
+                        message("Could not open original OCR. Protected screens cannot be captured.")
                         scheduleRefresh()
                     } finally {
                         buffer.close()
@@ -380,7 +221,8 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                     captureFailed(ticket, "Original capture failed (Android error $errorCode). No translated-screen fallback was used.")
                 }
             })
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.w(TAG, "Window capture request failed", error)
             captureFailed(ticket, "Android could not capture the original app window.")
         }
     }
@@ -389,6 +231,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         if (!session.isPending(ticket)) return
         session.reset()
         blockedUntil = SystemClock.uptimeMillis() + 600
+        floatingButton?.visibility = if (locked()) View.INVISIBLE else View.VISIBLE
         message(text)
         handler.postDelayed({ scheduleRefresh() }, 610)
     }
@@ -405,9 +248,9 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun showFloatingButton() {
-        if (floatingButton != null) return
+        if (!operational || floatingButton != null) return
         val wm = requiredService<WindowManager>()
-        val size = buttonSizeDp().dp
+        val size = buttonSizeDp().coerceIn(32, 112).dp
         val backgroundColor = buttonBackgroundColor()
         val button = FrameLayout(this).apply {
             background = GradientDrawable().apply {
@@ -415,49 +258,55 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                 setColor(backgroundColor)
             }
             elevation = 8.dp.toFloat()
-            alpha = buttonAlpha()
+            alpha = buttonAlpha().coerceIn(0.25f, 1f)
             contentDescription = "Screen OCR"
+            setOnClickListener { triggerManualLookup() }
             addView(
                 ImageView(this@ScrollTranslateLookupAccessibilityService).apply {
                     setImageResource(R.drawable.ic_chimahon)
                     imageTintList = ColorStateList.valueOf(buttonIconColor(backgroundColor))
                     scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    setPadding(14.dp, 14.dp, 14.dp, 14.dp)
+                    setPadding(10.dp, 10.dp, 10.dp, 10.dp)
                 },
                 FrameLayout.LayoutParams(size, size),
             )
         }
-
         val bounds = wm.currentWindowMetrics.bounds
         val params = WindowManager.LayoutParams(
             size,
             size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            android.graphics.PixelFormat.TRANSLUCENT,
+            PixelFormat.TRANSLUCENT,
         ).apply {
+            title = "Chimahon floating original OCR"
             gravity = Gravity.TOP or Gravity.START
-            x = bounds.width() - size - 16.dp
+            x = (bounds.width() - size - 16.dp).coerceAtLeast(0)
             y = (bounds.height() * 0.42f).roundToInt()
         }
-
         button.installDragHandler(params)
-        floatingButton = button
-        floatingButtonParams = params
-        wm.addView(button, params)
+        runCatching {
+            wm.addView(button, params)
+            floatingButton = button
+            floatingButtonParams = params
+        }.onFailure {
+            Log.w(TAG, "Cannot show floating OCR button", it)
+            message("Could not show the OCR button. Disable and re-enable the accessibility service.")
+        }
     }
 
     private fun View.installDragHandler(params: WindowManager.LayoutParams) {
         val wm = requiredService<WindowManager>()
-        val touchSlop = 8.dp
+        val touchSlop = ViewConfiguration.get(this@ScrollTranslateLookupAccessibilityService).scaledTouchSlop
         var downRawX = 0f
         var downRawY = 0f
         var startX = 0
         var startY = 0
         var moved = false
-
+        var canceled = false
         setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -466,25 +315,35 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
                     startX = params.x
                     startY = params.y
                     moved = false
-                    true
+                    canceled = false
                 }
+                MotionEvent.ACTION_POINTER_DOWN -> canceled = true
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downRawX).roundToInt()
                     val dy = (event.rawY - downRawY).roundToInt()
                     moved = moved || kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop
-                    val bounds = wm.currentWindowMetrics.bounds
-                    params.x = (startX + dx).coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
-                    params.y = (startY + dy).coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
-                    runCatching { wm.updateViewLayout(this, params) }
-                    true
+                    if (moved && !canceled) {
+                        val bounds = wm.currentWindowMetrics.bounds
+                        params.x = (startX + dx).coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+                        params.y = (startY + dy).coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+                        runCatching { wm.updateViewLayout(this, params) }
+                    }
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) triggerManualLookup()
-                    true
-                }
-                else -> false
+                MotionEvent.ACTION_UP -> if (!moved && !canceled) performClick()
+                MotionEvent.ACTION_CANCEL -> canceled = true
             }
+            true
         }
+    }
+
+    private fun clampFloatingButton() {
+        val button = floatingButton ?: return
+        val params = floatingButtonParams ?: return
+        val wm = requiredService<WindowManager>()
+        val bounds = wm.currentWindowMetrics.bounds
+        params.x = params.x.coerceIn(0, (bounds.width() - params.width).coerceAtLeast(0))
+        params.y = params.y.coerceIn(0, (bounds.height() - params.height).coerceAtLeast(0))
+        runCatching { wm.updateViewLayout(button, params) }
     }
 
     private fun removeFloatingButton() {
@@ -510,9 +369,7 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
     }
 
     private fun buttonIconColor(background: Int): Int {
-        val luminance = 0.299 * Color.red(background) +
-            0.587 * Color.green(background) +
-            0.114 * Color.blue(background)
+        val luminance = 0.299 * Color.red(background) + 0.587 * Color.green(background) + 0.114 * Color.blue(background)
         return if (luminance < 128) Color.WHITE else Color.BLACK
     }
 
@@ -520,37 +377,54 @@ class ScrollTranslateLookupAccessibilityService : AccessibilityService() {
         get() = (this * resources.displayMetrics.density).roundToInt()
 
     private fun triggerManualLookup() {
-        if (!operational || locked() || session.state != ScrollLookupSession.State.IDLE) return
+        if (!operational || locked() || SystemClock.uptimeMillis() < blockedUntil) return
+        if (overlay?.isShowing == true) {
+            overlay?.dismiss()
+            return
+        }
+        if (session.state != ScrollLookupSession.State.IDLE) return
         refreshWindows()
         val target = targets.firstOrNull() ?: run {
-            message("No capturable app window found.")
+            message("No capturable app window found. Return to the content and try again.")
             return
         }
         captureOriginal(target)
     }
 
     private fun shutdown() {
+        if (activeInstance === this) activeInstance = null
         operational = false
-        setRouting(false)
         session.reset()
-        pendingTarget = null
-        currentTarget = null
         handler.removeCallbacksAndMessages(null)
         refreshScheduled = false
-        touchController?.unregisterCallback(touchCallback)
-        touchController = null
         overlay?.release()
         overlay = null
         removeFloatingButton()
         windowOwners.clear()
+        targets = emptyList()
     }
 
     private data class CaptureTarget(val id: Int, val bounds: Rect, val display: Rect)
 
-    private companion object {
-        const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
-        val EXCLUDED_PACKAGES = setOf(
-            GOOGLE_PACKAGE,
+    companion object {
+        private const val TAG = "ChimahonOriginalOcr"
+        @Volatile private var activeInstance: ScrollTranslateLookupAccessibilityService? = null
+
+        /** Reuse this button instead of opening a second screen-recording permission flow. */
+        fun showButtonIfConnected(): Boolean {
+            val service = activeInstance?.takeIf { it.operational } ?: return false
+            service.handler.post {
+                if (service.operational) {
+                    service.showFloatingButton()
+                    service.clampFloatingButton()
+                    service.scheduleRefresh()
+                }
+            }
+            return true
+        }
+
+        private val EXCLUDED_PACKAGES = setOf(
+            "com.google.android.googlequicksearchbox",
             "android",
             "com.android.systemui",
             "com.android.settings",

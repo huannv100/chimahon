@@ -16,6 +16,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -80,6 +82,7 @@ internal class ScreenLookupOverlayController(
     private val showOriginalSnapshot: Boolean = false,
     private val dismissOnEmptyTap: Boolean = false,
 ) {
+    private val preserveWindowFocus = ScreenLookupWindowPolicy.preservesFocus(windowType)
     private var overlayView: ComposeView? = null
     private var lifecycleOwner: OverlayLifecycleOwner? = null
     private var screenshot: Bitmap? = null
@@ -119,16 +122,18 @@ internal class ScreenLookupOverlayController(
         lifecycleOwner = owner
 
         val view = ComposeView(context).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_BACK) {
-                    if (event.action == KeyEvent.ACTION_UP) {
-                        handleBack()
+            isFocusable = !preserveWindowFocus
+            isFocusableInTouchMode = !preserveWindowFocus
+            if (!preserveWindowFocus) {
+                setOnKeyListener { _, keyCode, event ->
+                    if (keyCode == KeyEvent.KEYCODE_BACK) {
+                        if (event.action == KeyEvent.ACTION_UP) {
+                            handleBack()
+                        }
+                        true
+                    } else {
+                        false
                     }
-                    true
-                } else {
-                    false
                 }
             }
             setViewTreeLifecycleOwner(owner)
@@ -151,9 +156,10 @@ internal class ScreenLookupOverlayController(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
             windowType,
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            ScreenLookupWindowPolicy.flagsFor(windowType),
             PixelFormat.TRANSLUCENT,
         ).apply {
+            title = if (preserveWindowFocus) "Chimahon original OCR (non-focusable)" else "Chimahon screen OCR"
             gravity = Gravity.TOP or Gravity.START
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 fitInsetsTypes = 0
@@ -167,8 +173,11 @@ internal class ScreenLookupOverlayController(
 
         windowManager.addView(view, params)
         overlayView = view
-        view.requestFocus()
-        registerBackCallback(view)
+        // A focus request here used to dismiss the Google assistant/translation window.
+        if (!preserveWindowFocus) {
+            view.requestFocus()
+            registerBackCallback(view)
+        }
     }
 
     fun dismiss(recycleScreenshot: Boolean = true, notify: Boolean = true) {
@@ -468,6 +477,17 @@ internal fun ScreenLookupOverlay(
                         matchOffset = off
                     },
                 )
+            }
+        }
+
+        if (showOriginalSnapshot) {
+            // Non-focusable windows deliberately do not handle Android Back: it belongs
+            // to Google. Always provide a local exit, including during OCR/loading/errors.
+            FilledTonalButton(
+                onClick = onClose,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 48.dp, end = 12.dp),
+            ) {
+                Text("Close OCR")
             }
         }
     }

@@ -3,7 +3,7 @@
     android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
-    android:canRequestTouchExplorationMode="true"
+    android:canRequestTouchExplorationMode="false"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
     android:description="@string/scroll_translate_lookup_description"

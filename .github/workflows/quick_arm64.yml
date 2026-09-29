@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: floating-ocr-arm64-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -18,36 +22,38 @@ jobs:
           submodules: recursive
           persist-credentials: false
           show-progress: false
-
       - name: Remove unused legacy vendor wrapper
         run: rm -f vendor/FlexibleAdapter/gradle/wrapper/gradle-wrapper.jar vendor/FlexibleAdapter/gradlew vendor/FlexibleAdapter/gradlew.bat
-
       - name: Limit this CI build to arm64-v8a
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          app = Path("app/build.gradle.kts")
+          app = Path('app/build.gradle.kts')
           s = app.read_text()
-          s = s.replace('isUniversalApk = true', 'isUniversalApk = false')
-          s = s.replace('include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")', 'include("arm64-v8a")')
-          app.write_text(s)
-
+          assert 'include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")' in s
+          app.write_text(s.replace('isUniversalApk = true', 'isUniversalApk = false').replace('include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")', 'include("arm64-v8a")'))
           PY
-
       - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520
         with:
           java-version-file: .github/.java-version
           distribution: temurin
-
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
-
+      - name: Check floating OCR safety invariants
+        run: python3 qa/verify_floating_ocr.py
       - name: Build ARM64 preview APK
-        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-scroll-lookup-s24 -PreleaseVersionCode=24604 --console=plain
-
-      - name: Upload ARM64 APK
+        run: ./gradlew :app:assemblePreview -PreleaseVersionName=2.4.6-floating-ocr-focusfix.5 -PreleaseVersionCode=24605 --console=plain
+      - name: Run app unit tests including window focus policy
+        run: ./gradlew :app:testReleaseUnitTest --console=plain
+      - name: Upload unit test reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: Chimahon-S24-scroll-lookup-arm64
+          name: floating-ocr-focusfix-test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+      - name: Upload ARM64 APK after successful build and tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Chimahon-S24-floating-OCR-focusfix-arm64
           path: app/build/outputs/apk/preview/*arm64-v8a*.apk
           if-no-files-found: error

@@ -34,9 +34,9 @@ import androidx.core.content.getSystemService
 import eu.kanade.presentation.theme.TachiyomiTheme
 import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
 import eu.kanade.tachiyomi.util.view.setComposeContent
-import tachiyomi.core.common.i18n.stringResource as contextStringResource
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.i18n.stringResource
+import tachiyomi.core.common.i18n.stringResource as contextStringResource
 
 class ScreenLookupPermissionActivity : BaseActivity() {
 
@@ -47,18 +47,27 @@ class ScreenLookupPermissionActivity : BaseActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val data = result.data
-        if (result.resultCode == Activity.RESULT_OK && data != null) {
-            ScreenLookupService.start(this, result.resultCode, data)
-            moveTaskToBack(true)
+        if (ScrollTranslateLookupAccessibilityService.showButtonIfConnected()) {
+            // The service may have been enabled while the consent dialog was open.
+            finish()
         } else {
-            Toast.makeText(this, this.contextStringResource(MR.strings.screen_lookup_capture_denied), Toast.LENGTH_SHORT).show()
+            if (result.resultCode == Activity.RESULT_OK && data != null) {
+                ScreenLookupService.start(this, result.resultCode, data)
+                moveTaskToBack(true)
+            } else {
+                Toast.makeText(this, this.contextStringResource(MR.strings.screen_lookup_capture_denied), Toast.LENGTH_SHORT).show()
+            }
+            finish()
         }
-        finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ScreenLookupServiceState.isEntryInProgress = true
         super.onCreate(savedInstanceState)
+        if (ScrollTranslateLookupAccessibilityService.showButtonIfConnected()) {
+            finish()
+            return
+        }
 
         setComposeContent {
             TachiyomiTheme {
@@ -68,10 +77,7 @@ class ScreenLookupPermissionActivity : BaseActivity() {
                 )
             }
         }
-
-        if (Settings.canDrawOverlays(this)) {
-            requestProjection()
-        }
+        if (Settings.canDrawOverlays(this)) requestProjection()
     }
 
     override fun onResume() {
@@ -82,21 +88,18 @@ class ScreenLookupPermissionActivity : BaseActivity() {
         }
     }
 
+    override fun onDestroy() {
+        ScreenLookupServiceState.isEntryInProgress = false
+        super.onDestroy()
+    }
+
     private fun openOverlaySettings() {
         returnedFromOverlaySettings = true
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName"),
-        )
+        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
         runCatching {
             startActivity(intent)
         }.recoverCatching {
-            startActivity(
-                Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:$packageName"),
-                ),
-            )
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         }.onFailure {
             returnedFromOverlaySettings = false
             Toast.makeText(this, this.contextStringResource(MR.strings.screen_lookup_overlay_required), Toast.LENGTH_LONG).show()
@@ -104,6 +107,10 @@ class ScreenLookupPermissionActivity : BaseActivity() {
     }
 
     private fun requestProjection() {
+        if (ScrollTranslateLookupAccessibilityService.showButtonIfConnected()) {
+            finish()
+            return
+        }
         if (projectionRequested) return
         projectionRequested = true
         val mediaProjectionManager = getSystemService<MediaProjectionManager>()
@@ -115,38 +122,25 @@ class ScreenLookupPermissionActivity : BaseActivity() {
         projectionLauncher.launch(mediaProjectionManager.createScreenLookupCaptureIntent())
     }
 
-    private fun MediaProjectionManager.createScreenLookupCaptureIntent(): Intent {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+    private fun MediaProjectionManager.createScreenLookupCaptureIntent(): Intent =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             createScreenCaptureIntent(MediaProjectionConfig.createConfigForUserChoice())
         } else {
             createScreenCaptureIntent()
         }
-    }
 }
 
 @Composable
-private fun ScreenLookupPermissionContent(
-    onRequestOverlay: () -> Unit,
-    onCancel: () -> Unit,
-) {
+private fun ScreenLookupPermissionContent(onRequestOverlay: () -> Unit, onCancel: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                imageVector = Icons.Outlined.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
+            Icon(imageVector = Icons.Outlined.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = stringResource(MR.strings.screen_lookup_enable_title),
-                style = MaterialTheme.typography.headlineSmall,
-            )
+            Text(text = stringResource(MR.strings.screen_lookup_enable_title), style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = stringResource(MR.strings.screen_lookup_enable_summary),
@@ -154,16 +148,9 @@ private fun ScreenLookupPermissionContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(24.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
-            ) {
-                OutlinedButton(onClick = onCancel) {
-                    Text(stringResource(MR.strings.action_cancel))
-                }
-                Button(onClick = onRequestOverlay) {
-                    Text(stringResource(MR.strings.action_open_settings))
-                }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)) {
+                OutlinedButton(onClick = onCancel) { Text(stringResource(MR.strings.action_cancel)) }
+                Button(onClick = onRequestOverlay) { Text(stringResource(MR.strings.action_open_settings)) }
             }
         }
     }

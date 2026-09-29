@@ -33,18 +33,6 @@ jobs:
           s = s.replace('include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")', 'include("arm64-v8a")')
           app.write_text(s)
 
-          p = Path("chimahon-local-ocr/build.gradle.kts")
-          s = p.read_text()
-          needle = '''    defaultConfig {
-          externalNativeBuild {'''
-          repl = '''    defaultConfig {
-          ndk {
-              abiFilters += "arm64-v8a"
-          }
-          externalNativeBuild {'''
-          if needle not in s:
-              raise SystemExit("local OCR defaultConfig anchor not found")
-          p.write_text(s.replace(needle, repl))
           PY
 
       - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520

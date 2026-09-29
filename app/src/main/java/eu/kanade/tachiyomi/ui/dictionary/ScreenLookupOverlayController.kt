@@ -365,8 +365,9 @@ internal fun ScreenLookupOverlay(
                 }
             },
             onEmptyTap = {
-                selection = null
-                showTapHint = false
+                // In Scroll Translate lookup mode, tapping outside OCR text
+                // dismisses Chimahon completely and returns control to the screen.
+                onClose()
             },
         )
 

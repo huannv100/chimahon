@@ -4,7 +4,9 @@ Based on Chimahon v2.4.6. Old Douyin/Quick Translate code is not included.
 
 ## Setup
 
-Use the preview APK, import dictionaries, and select the desired active language profile (Chinese for Chinese OCR). In Android Settings > Accessibility > Installed apps/services, enable this Chimahon service and read its description. Android 14+ is required. Start Google's Scroll and Translate normally. Do not start Chimahon's separate MediaProjection Screen OCR session for this integration; it is not needed.
+Use the preview APK, import dictionaries, and select the desired active language profile (Chinese for Chinese OCR). Android 14+ is required. Start Google's Scroll and Translate first. Then, in Android Settings > Accessibility > Installed apps/services, enable this Chimahon service and read its description. Enabling the accessibility service is the explicit opt-in switch for tap-to-lookup; Google window detection is no longer required to arm the feature. Do not start Chimahon's separate MediaProjection Screen OCR session for this integration; it is not needed.
+
+After enabling the service, two diagnostic toasts are expected: "Chimahon lookup ready" when Android starts the service, followed by "Chimahon lookup armed" once an eligible app window is available. If the second toast is missing, the service did not find a capturable app window.
 
 A short tap in the content area is consumed and captures the original APPLICATION WINDOW with AccessibilityService.takeScreenshotOfWindow. It does not wait for Google to hide translation, and does not inject a tap, Back, play or pause action. TouchInteractionController delegates swipes to Android. No Google TYPE_VIEW_CLICKED event is required.
 

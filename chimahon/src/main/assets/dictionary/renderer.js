@@ -1072,16 +1072,25 @@
         return;
       }
 
-      // If the user has an active text selection, don't trigger a lookup.
-      if (window.getSelection().toString().trim().length > 0) return;
-
       // Skip interactive controls — buttons, dict tags, inflection toggles, etc.
       if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, .dictionary-header, details, summary, a, .gloss-link, .gloss-sc-a')) return;
 
-      const word = extractTextAtPoint(e.clientX, e.clientY);
+      // Manual text selection takes priority for recursive lookup. This lets the
+      // user select only part of a long headword/phrase and consult that exact
+      // substring instead of looking up the whole rendered expression.
+      const selection = window.getSelection();
+      const selectedText = selection && !selection.isCollapsed
+        ? selection.toString().trim()
+        : (_lastSelection || '').trim();
+
+      const word = selectedText || extractTextAtPoint(e.clientX, e.clientY);
       if (!word) return;
 
-      rememberRecursiveSelectionAtPoint(e.clientX, e.clientY);
+      if (!selectedText) {
+        rememberRecursiveSelectionAtPoint(e.clientX, e.clientY);
+      } else {
+        _recursiveSelectionStart = null;
+      }
 
       const sentenceContext = getSentenceContextAtPoint(e.clientX, e.clientY);
       let url = CHIMA_SCHEME + '//lookup?q=' + encodeURIComponent(word);

@@ -1064,24 +1064,26 @@
       const target = e.target;
       if (!target) return;
 
-      // If tapping on a rendered kanji-tappable span, route as kanji-only lookup
-      const kanjiSpan = target.closest('.kanji-tappable');
-      if (kanjiSpan) {
-        navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
-        e.stopPropagation();
-        return;
-      }
-
       // Skip interactive controls — buttons, dict tags, inflection toggles, etc.
       if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, details, summary, a, .gloss-link, .gloss-sc-a')) return;
 
-      // Manual text selection takes priority for recursive lookup. This lets the
-      // user select only part of a long headword/phrase and consult that exact
-      // substring instead of looking up the whole rendered expression.
+      // Manual text selection must win over single-kanji taps. Headwords wrap
+      // each Han character in .kanji-tappable spans, so checking kanji first
+      // prevents a selected multi-character substring from ever reaching
+      // recursive lookup.
       const selection = window.getSelection();
       const selectedText = selection && !selection.isCollapsed
         ? selection.toString().trim()
         : (_lastSelection || '').trim();
+
+      if (!selectedText) {
+        const kanjiSpan = target.closest('.kanji-tappable');
+        if (kanjiSpan) {
+          navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
+          e.stopPropagation();
+          return;
+        }
+      }
 
       const word = selectedText || extractTextAtPoint(e.clientX, e.clientY);
       if (!word) return;

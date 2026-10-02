@@ -1096,9 +1096,24 @@
       if (!selectedText) {
         const kanjiSpan = target.closest('.kanji-tappable');
         const insideHeadword = !!target.closest('.headword');
-        // In a headword, do NOT collapse the tap to one Han character.
-        // Let extractTextAtPoint() scan forward from the tapped character so
-        // recursive lookup can resolve a multi-character sub-word/phrase.
+
+        if (kanjiSpan && insideHeadword && kanjiSpan.dataset.headwordExpression) {
+          const expression = kanjiSpan.dataset.headwordExpression;
+          const offset = Number.parseInt(kanjiSpan.dataset.headwordOffset || '0', 10);
+          const query = expression.slice(Number.isFinite(offset) ? offset : 0).trim();
+          if (query) {
+            rememberRecursiveSelectionAtPoint(e.clientX, e.clientY);
+            let url = CHIMA_SCHEME + '//lookup?q=' + encodeURIComponent(query);
+            url += '&sentence=' + encodeURIComponent(expression);
+            url += '&offset=' + encodeURIComponent(String(Number.isFinite(offset) ? offset : 0));
+            url += '&x=' + Math.round(e.clientX);
+            url += '&y=' + Math.round(e.clientY);
+            navigateTo(url);
+            e.stopPropagation();
+            return;
+          }
+        }
+
         if (kanjiSpan && !insideHeadword) {
           navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
           e.stopPropagation();
@@ -1853,17 +1868,22 @@
     return [{text: expression, reading: reading}];
   }
 
-  function appendWithKanjiSpans(parent, text) {
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
+  function appendWithKanjiSpans(parent, text, headwordExpression = null, baseOffset = 0) {
+    let localOffset = 0;
+    for (const ch of text) {
       if (isKanjiCodepoint(ch.codePointAt(0))) {
         const span = document.createElement('span');
         span.className = 'kanji-tappable';
         span.textContent = ch;
+        if (headwordExpression != null) {
+          span.dataset.headwordExpression = headwordExpression;
+          span.dataset.headwordOffset = String(baseOffset + localOffset);
+        }
         parent.appendChild(span);
       } else {
         parent.appendChild(document.createTextNode(ch));
       }
+      localOffset += ch.length;
     }
   }
 
@@ -1879,13 +1899,14 @@
     })();
 
     const segments = distributeFurigana(expression, reading);
+    let expressionOffset = 0;
 
     for (const segment of segments) {
       if (segment.reading) {
         const ruby = document.createElement('ruby');
         ruby.className = 'headword-text-container headword-term';
         if (popularityClass) ruby.classList.add(popularityClass);
-        appendWithKanjiSpans(ruby, segment.text);
+        appendWithKanjiSpans(ruby, segment.text, expression, expressionOffset);
 
         const rt = document.createElement('rt');
         rt.className = 'headword-furigana';
@@ -1897,9 +1918,10 @@
         const termNode = document.createElement('span');
         termNode.className = 'headword-term';
         if (popularityClass) termNode.classList.add(popularityClass);
-        appendWithKanjiSpans(termNode, segment.text);
+        appendWithKanjiSpans(termNode, segment.text, expression, expressionOffset);
         headword.appendChild(termNode);
       }
+      expressionOffset += segment.text.length;
     }
 
     if (termTags) {

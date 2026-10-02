@@ -46,7 +46,7 @@ jobs:
           grep -q 'android:label="Chimahon Huan"' app/src/main/AndroidManifest.xml
           grep -q 'ScrollTranslateLookupAccessibilityService' app/src/main/AndroidManifest.xml
           ! grep -q 'OcrTapHint(' app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookupOverlayController.kt
-          grep -q 'Manual text selection takes priority' chimahon/src/main/assets/dictionary/renderer.js
+          grep -q 'Manual text selection must win over single-kanji taps' chimahon/src/main/assets/dictionary/renderer.js
           ! grep -q 'firebase-analytics' gradle/libs.versions.toml
           ! grep -q 'firebase-crashlytics' gradle/libs.versions.toml
 
@@ -66,7 +66,7 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
           "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "package: name='app.chimahon.huan.beta'" /tmp/badging.txt
-          unzip -p "$APK" assets/dictionary/renderer.js | grep -q 'Manual text selection takes priority'
+          unzip -p "$APK" assets/dictionary/renderer.js | grep -q 'Manual text selection must win over single-kanji taps'
           cp "$APK" Chimahon-Huan-v2.4.6-arm64.apk
           sha256sum Chimahon-Huan-v2.4.6-arm64.apk
 

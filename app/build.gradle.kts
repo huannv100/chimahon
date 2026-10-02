@@ -21,7 +21,7 @@ android {
     namespace = "eu.kanade.tachiyomi"
 
     defaultConfig {
-        applicationId = "app.chimahon"
+        applicationId = "app.chimahon.huan"
 
         versionCode = releaseVersionCode ?: 3
         versionName = releaseVersionName ?: "1.1.0"
@@ -111,7 +111,7 @@ android {
             isEnable = true
             isUniversalApk = true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            include("arm64-v8a")
         }
     }
 

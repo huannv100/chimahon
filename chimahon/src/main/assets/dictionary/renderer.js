@@ -1095,7 +1095,11 @@
 
       if (!selectedText) {
         const kanjiSpan = target.closest('.kanji-tappable');
-        if (kanjiSpan) {
+        const insideHeadword = !!target.closest('.headword');
+        // In a headword, do NOT collapse the tap to one Han character.
+        // Let extractTextAtPoint() scan forward from the tapped character so
+        // recursive lookup can resolve a multi-character sub-word/phrase.
+        if (kanjiSpan && !insideHeadword) {
           navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
           e.stopPropagation();
           return;

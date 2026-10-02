@@ -419,14 +419,6 @@ internal fun ScreenLookupOverlay(
             modifier = Modifier.align(Alignment.Center),
         )
 
-        OcrTapHint(
-            visible = showTapHint && blocks.isNotEmpty() && selection == null,
-            hintText = stringResource(MR.strings.screen_lookup_tap_text),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 84.dp),
-        )
-
         val selected = selection
         val cropMode = activeProfile.ankiCropMode
         val cropPresetKey = activeProfile.ankiCropPreset

@@ -47,6 +47,8 @@ jobs:
           grep -q 'ScrollTranslateLookupAccessibilityService' app/src/main/AndroidManifest.xml
           ! grep -q 'OcrTapHint(' app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookupOverlayController.kt
           grep -q 'Manual text selection must win over single-kanji taps' chimahon/src/main/assets/dictionary/renderer.js
+          grep -q '_pendingRecursiveSelection' chimahon/src/main/assets/dictionary/renderer.js
+          grep -q "addEventListener('pointerdown'" chimahon/src/main/assets/dictionary/renderer.js
           ! grep -q 'firebase-analytics' gradle/libs.versions.toml
           ! grep -q 'firebase-crashlytics' gradle/libs.versions.toml
 
@@ -67,6 +69,7 @@ jobs:
           "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "package: name='app.chimahon.huan.beta'" /tmp/badging.txt
           unzip -p "$APK" assets/dictionary/renderer.js | grep -q 'Manual text selection must win over single-kanji taps'
+          unzip -p "$APK" assets/dictionary/renderer.js | grep -q '_pendingRecursiveSelection'
           cp "$APK" Chimahon-Huan-v2.4.6-arm64.apk
           sha256sum Chimahon-Huan-v2.4.6-arm64.apk
 

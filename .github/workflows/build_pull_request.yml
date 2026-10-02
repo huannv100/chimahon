@@ -42,7 +42,6 @@ jobs:
           grep -q 'Manual text selection takes priority' chimahon/src/main/assets/dictionary/renderer.js
           ! grep -q 'firebase-analytics' gradle/libs.versions.toml
           ! grep -q 'firebase-crashlytics' gradle/libs.versions.toml
-          ! grep -q 'include-telemetry' .github/workflows/build_pull_request.yml
 
       - name: Run unit tests
         run: ./gradlew testReleaseUnitTest

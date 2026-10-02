@@ -426,6 +426,19 @@
             android:foregroundServiceType="mediaProjection" />
 
         <service
+            android:name=".ui.dictionary.ScrollTranslateLookupAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/scroll_translate_lookup_accessibility_service" />
+        </service>
+
+        <service
             android:name=".ui.dictionary.ScreenLookupTileService"
             android:exported="true"
             android:icon="@drawable/ic_chimahon"

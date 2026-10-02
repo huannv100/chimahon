@@ -11,6 +11,16 @@ plugins {
     alias(libs.plugins.sqldelight) apply false
 }
 
+subprojects {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("com.github.arkon.FlexibleAdapter:flexible-adapter"))
+                .using(project(":flexible-adapter-compat"))
+                .because("Build pinned FlexibleAdapter source when JitPack artifact is unavailable")
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

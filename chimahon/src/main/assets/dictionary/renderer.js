@@ -11,6 +11,7 @@
   const MAX_SCAN_CHARS = 24;   // chars to extract forward from tap point
 
   let _lastSelection = '';
+  let _pendingRecursiveSelection = '';
   let _pendingPopupSelection = '';
   let _selectedDictionaries = {}; // entryIndex -> dictName
   let _wordAudioEnabled = true;
@@ -1060,6 +1061,21 @@
     if (_listenersInstalled) return;
     _listenersInstalled = true;
 
+    // Android WebView may collapse an active text selection as soon as the
+    // user touches it. Capture it on pointerdown (capture phase) so recursive
+    // lookup can still use the selected headword substring on the later click.
+    document.addEventListener('pointerdown', (e) => {
+      const target = e.target;
+      if (!target) return;
+      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, details, summary, a, .gloss-link, .gloss-sc-a')) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) {
+        _pendingRecursiveSelection = selection.toString().trim();
+      } else {
+        _pendingRecursiveSelection = '';
+      }
+    }, {capture: true, passive: true});
+
     document.addEventListener('click', (e) => {
       const target = e.target;
       if (!target) return;
@@ -1074,7 +1090,8 @@
       const selection = window.getSelection();
       const selectedText = selection && !selection.isCollapsed
         ? selection.toString().trim()
-        : (_lastSelection || '').trim();
+        : (_pendingRecursiveSelection || _lastSelection || '').trim();
+      _pendingRecursiveSelection = '';
 
       if (!selectedText) {
         const kanjiSpan = target.closest('.kanji-tappable');

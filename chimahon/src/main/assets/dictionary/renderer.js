@@ -742,7 +742,7 @@
     const node = range.startContainer;
     if (!node || node.nodeType !== Node.TEXT_NODE) return null;
 
-    const container = node.parentElement?.closest?.('.definition-item, .entry-body-section, .entry-body, article') || document.body;
+    const container = node.parentElement?.closest?.('.dictionary-header, .definition-item, .entry-body-section, .entry-body, article') || document.body;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
       acceptNode: (n) => {
         const parent = n.parentElement;
@@ -805,7 +805,7 @@
 
     if (isCJK(ch)) {
       // Collect forward text across nodes, skipping furigana (<rt>)
-      const container = node.parentElement.closest('.entry-body, .headword, .gloss-content') || document.body;
+      const container = node.parentElement.closest('.dictionary-header, .entry-body, .headword, .gloss-content') || document.body;
       const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => isFurigana(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
       });
@@ -1001,7 +1001,7 @@
     const start = _recursiveSelectionStart;
     if (!start || !Number.isFinite(codePointCount) || codePointCount <= 0) return null;
 
-    const root = start.node.parentElement?.closest('.entry-body, .headword, .gloss-content') || document.body;
+    const root = start.node.parentElement?.closest('.dictionary-header, .entry-body, .headword, .gloss-content') || document.body;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => isFurigana(node) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
@@ -1073,7 +1073,7 @@
       }
 
       // Skip interactive controls — buttons, dict tags, inflection toggles, etc.
-      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, .dictionary-header, details, summary, a, .gloss-link, .gloss-sc-a')) return;
+      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, details, summary, a, .gloss-link, .gloss-sc-a')) return;
 
       // Manual text selection takes priority for recursive lookup. This lets the
       // user select only part of a long headword/phrase and consult that exact

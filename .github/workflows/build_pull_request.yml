@@ -71,11 +71,17 @@ jobs:
 
           "$ZIPALIGN" -f -p 4 patched-unsigned.apk patched-aligned.apk
 
-          keytool -genkeypair -v             -keystore huan-debug.keystore             -storepass android             -alias androiddebugkey             -keypass android             -keyalg RSA             -keysize 2048             -validity 10000             -dname "CN=Huan Chimahon Test,O=Personal,C=KR"
+          echo "${{ secrets.SIGNING_KEY }}" | base64 --decode > huan-signing.jks
 
-          "$APKSIGNER" sign             --ks huan-debug.keystore             --ks-pass pass:android             --key-pass pass:android             --out Chimahon-v2.4.6-Huan-arm64.apk             patched-aligned.apk
+          "$APKSIGNER" sign \
+            --ks huan-signing.jks \
+            --ks-key-alias "${{ secrets.ALIAS }}" \
+            --ks-pass pass:"${{ secrets.KEY_STORE_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
+            --out Chimahon-v2.4.6-Huan-arm64.apk \
+            patched-aligned.apk
 
-          "$APKSIGNER" verify --verbose Chimahon-v2.4.6-Huan-arm64.apk
+          "$APKSIGNER" verify --verbose --print-certs Chimahon-v2.4.6-Huan-arm64.apk
           ls -lh Chimahon-v2.4.6-Huan-arm64.apk
 
       - name: Upload APK

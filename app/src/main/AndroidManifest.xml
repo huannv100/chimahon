@@ -69,7 +69,7 @@
         android:enableOnBackInvokedCallback="true"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="Chimahon Huan"
         android:largeHeap="true"
         android:localeConfig="@xml/locales_config"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -428,7 +428,7 @@
         <service
             android:name=".ui.dictionary.ScrollTranslateLookupAccessibilityService"
             android:exported="true"
-            android:label="@string/app_name"
+            android:label="Chimahon Huan"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

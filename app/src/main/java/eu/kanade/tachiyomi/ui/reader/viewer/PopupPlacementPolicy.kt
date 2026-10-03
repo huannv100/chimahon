@@ -1,6 +1,6 @@
 package eu.kanade.tachiyomi.ui.reader.viewer
 
-internal data class PopupSourceRect(
+data class PopupSourceRect(
     val left: Float,
     val top: Float,
     val right: Float,

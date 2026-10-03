@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import eu.kanade.tachiyomi.ui.reader.viewer.OcrTextBlock
+import eu.kanade.tachiyomi.ui.reader.viewer.PopupSourceRect
 import eu.kanade.tachiyomi.ui.reader.viewer.orderedLineIndices
 
 data class OcrSelection(
@@ -304,6 +305,99 @@ fun OcrTapHint(
             text = hintText,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+
+fun ocrMatchedSourceRects(
+    block: OcrTextBlock,
+    selection: OcrSelection,
+    activeMatchCount: Int,
+    activeMatchOffset: Int,
+    widthPx: Float,
+    heightPx: Float,
+): List<PopupSourceRect> {
+    if (activeMatchCount <= 0 || widthPx <= 0f || heightPx <= 0f) {
+        return listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
+        )
+    }
+
+    val geometries = block.lineGeometries
+    if (geometries == null || geometries.size != block.lines.size) {
+        return listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
+        )
+    }
+
+    val orderedIndices = block.orderedLineIndices()
+    val orderedSentence = orderedIndices.joinToString("") { block.lines[it] }
+    val lineOrder = if (selection.sentence == orderedSentence) orderedIndices else block.lines.indices.toList()
+
+    val absStart = selection.sentenceOffset + activeMatchOffset
+    val absEnd = absStart + activeMatchCount
+    var accumulated = 0
+    val out = mutableListOf<PopupSourceRect>()
+
+    for (i in lineOrder) {
+        val text = block.lines[i]
+        val lineLen = text.length
+        val lineEnd = accumulated + lineLen
+
+        if (lineLen > 0 && absStart < lineEnd && absEnd > accumulated) {
+            val overlapL = maxOf(absStart, accumulated)
+            val overlapR = minOf(absEnd, lineEnd)
+            if (overlapR > overlapL) {
+                val startFrac = (overlapL - accumulated).toFloat() / lineLen
+                val endFrac = (overlapR - accumulated).toFloat() / lineLen
+                val geo = geometries[i]
+
+                val left = geo.xmin * widthPx
+                val top = geo.ymin * heightPx
+                val right = geo.xmax * widthPx
+                val bottom = geo.ymax * heightPx
+
+                val rect = if (block.vertical) {
+                    PopupSourceRect(
+                        left = left,
+                        top = top + (bottom - top) * startFrac,
+                        right = right,
+                        bottom = top + (bottom - top) * endFrac,
+                    )
+                } else {
+                    PopupSourceRect(
+                        left = left + (right - left) * startFrac,
+                        top = top,
+                        right = left + (right - left) * endFrac,
+                        bottom = bottom,
+                    )
+                }
+                if (rect.right > rect.left && rect.bottom > rect.top) out += rect
+            }
+        }
+
+        accumulated = lineEnd
+    }
+
+    return out.ifEmpty {
+        listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
         )
     }
 }

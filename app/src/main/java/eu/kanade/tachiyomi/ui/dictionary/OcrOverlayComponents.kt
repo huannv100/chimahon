@@ -13,6 +13,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -23,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import eu.kanade.tachiyomi.ui.reader.viewer.OcrTextBlock
+import eu.kanade.tachiyomi.ui.reader.viewer.PopupSourceRect
 import eu.kanade.tachiyomi.ui.reader.viewer.orderedLineIndices
 
 data class OcrSelection(
@@ -50,26 +53,63 @@ fun OcrBlockCanvas(
     onBlockTapped: (OcrTextBlock, Float, Float) -> Unit,
     onEmptyTap: () -> Unit,
     modifier: Modifier = Modifier,
+    forgivingTaps: Boolean = false,
+    allowEmptyTap: Boolean = true,
 ) {
     val highlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+    val currentBlockTapped by rememberUpdatedState(onBlockTapped)
+    val currentEmptyTap by rememberUpdatedState(onEmptyTap)
 
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(blocks) {
+            .pointerInput(blocks, forgivingTaps, allowEmptyTap) {
                 detectTapGestures { offset ->
-                    val tapped = blocks.firstOrNull { block ->
-                        offset.x >= block.xmin * size.width &&
-                            offset.x <= block.xmax * size.width &&
-                            offset.y >= block.ymin * size.height &&
-                            offset.y <= block.ymax * size.height
-                    }
-                    if (tapped == null) {
-                        onEmptyTap()
+                    if (size.width <= 0 || size.height <= 0) return@detectTapGestures
+                    if (forgivingTaps) {
+                        val widthDp = size.width / density
+                        val heightDp = size.height / density
+                        val rectangles = blocks.flatMapIndexed { index, block ->
+                            val lineRects = block.lineGeometries
+                                ?.takeIf { it.size == block.lines.size }
+                                ?.mapIndexedNotNull { line, geo ->
+                                    if (block.lines[line].isBlank()) return@mapIndexedNotNull null
+                                    OcrTapRect(
+                                        index, geo.xmin * widthDp, geo.ymin * heightDp,
+                                        geo.xmax * widthDp, geo.ymax * heightDp,
+                                    ).takeIf { it.valid }
+                                }
+                            lineRects?.takeIf { it.isNotEmpty() } ?: listOf(
+                                OcrTapRect(
+                                    index, block.xmin * widthDp, block.ymin * heightDp,
+                                    block.xmax * widthDp, block.ymax * heightDp,
+                                ),
+                            )
+                        }
+                        when (val result = resolveOcrTap(rectangles, offset.x / density, offset.y / density)) {
+                            is OcrTapResult.Hit -> currentBlockTapped(
+                                blocks[result.blockIndex],
+                                (result.x / widthDp).coerceIn(0f, 1f),
+                                (result.y / heightDp).coerceIn(0f, 1f),
+                            )
+                            OcrTapResult.Empty -> if (allowEmptyTap) currentEmptyTap()
+                            OcrTapResult.KeepOpen -> Unit
+                        }
                     } else {
-                        val tapX = (offset.x / size.width).coerceIn(0f, 1f)
-                        val tapY = (offset.y / size.height).coerceIn(0f, 1f)
-                        onBlockTapped(tapped, tapX, tapY)
+                        // Keep ordinary reader, camera and video OCR hit testing unchanged.
+                        val tapped = blocks.firstOrNull { block ->
+                            offset.x >= block.xmin * size.width &&
+                                offset.x <= block.xmax * size.width &&
+                                offset.y >= block.ymin * size.height &&
+                                offset.y <= block.ymax * size.height
+                        }
+                        if (tapped == null) {
+                            if (allowEmptyTap) currentEmptyTap()
+                        } else {
+                            val tapX = (offset.x / size.width).coerceIn(0f, 1f)
+                            val tapY = (offset.y / size.height).coerceIn(0f, 1f)
+                            currentBlockTapped(tapped, tapX, tapY)
+                        }
                     }
                 }
             },
@@ -265,6 +305,99 @@ fun OcrTapHint(
             text = hintText,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+
+fun ocrMatchedSourceRects(
+    block: OcrTextBlock,
+    selection: OcrSelection,
+    activeMatchCount: Int,
+    activeMatchOffset: Int,
+    widthPx: Float,
+    heightPx: Float,
+): List<PopupSourceRect> {
+    if (activeMatchCount <= 0 || widthPx <= 0f || heightPx <= 0f) {
+        return listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
+        )
+    }
+
+    val geometries = block.lineGeometries
+    if (geometries == null || geometries.size != block.lines.size) {
+        return listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
+        )
+    }
+
+    val orderedIndices = block.orderedLineIndices()
+    val orderedSentence = orderedIndices.joinToString("") { block.lines[it] }
+    val lineOrder = if (selection.sentence == orderedSentence) orderedIndices else block.lines.indices.toList()
+
+    val absStart = selection.sentenceOffset + activeMatchOffset
+    val absEnd = absStart + activeMatchCount
+    var accumulated = 0
+    val out = mutableListOf<PopupSourceRect>()
+
+    for (i in lineOrder) {
+        val text = block.lines[i]
+        val lineLen = text.length
+        val lineEnd = accumulated + lineLen
+
+        if (lineLen > 0 && absStart < lineEnd && absEnd > accumulated) {
+            val overlapL = maxOf(absStart, accumulated)
+            val overlapR = minOf(absEnd, lineEnd)
+            if (overlapR > overlapL) {
+                val startFrac = (overlapL - accumulated).toFloat() / lineLen
+                val endFrac = (overlapR - accumulated).toFloat() / lineLen
+                val geo = geometries[i]
+
+                val left = geo.xmin * widthPx
+                val top = geo.ymin * heightPx
+                val right = geo.xmax * widthPx
+                val bottom = geo.ymax * heightPx
+
+                val rect = if (block.vertical) {
+                    PopupSourceRect(
+                        left = left,
+                        top = top + (bottom - top) * startFrac,
+                        right = right,
+                        bottom = top + (bottom - top) * endFrac,
+                    )
+                } else {
+                    PopupSourceRect(
+                        left = left + (right - left) * startFrac,
+                        top = top,
+                        right = left + (right - left) * endFrac,
+                        bottom = bottom,
+                    )
+                }
+                if (rect.right > rect.left && rect.bottom > rect.top) out += rect
+            }
+        }
+
+        accumulated = lineEnd
+    }
+
+    return out.ifEmpty {
+        listOf(
+            PopupSourceRect(
+                left = block.xmin * widthPx,
+                top = block.ymin * heightPx,
+                right = block.xmax * widthPx,
+                bottom = block.ymax * heightPx,
+            ),
         )
     }
 }

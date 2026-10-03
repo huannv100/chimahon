@@ -1,0 +1,38 @@
+name: UI source snapshot
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect UI sources only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ui-source/app ui-source/dictionary ui-source/tests ui-source/reference
+          cp app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/OcrLookupPopup.kt ui-source/app/
+          cp app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/PopupPlacementPolicy.kt ui-source/app/
+          cp app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookupOverlayController.kt ui-source/app/
+          cp app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/OcrOverlayComponents.kt ui-source/app/
+          cp app/src/test/kotlin/eu/kanade/tachiyomi/ui/reader/viewer/PopupPlacementPolicyTest.kt ui-source/tests/
+          cp chimahon/src/main/assets/dictionary/* ui-source/dictionary/
+          git rev-parse HEAD > ui-source/SOURCE_COMMIT.txt
+          git clone --depth 1 https://github.com/yomidevs/yomitan.git /tmp/yomitan
+          git -C /tmp/yomitan rev-parse HEAD > ui-source/reference/YOMITAN_COMMIT.txt
+          cp /tmp/yomitan/ext/js/app/popup.js ui-source/reference/yomitan-popup.js
+          cp /tmp/yomitan/ext/js/app/frontend.js ui-source/reference/yomitan-frontend.js
+          cp /tmp/yomitan/ext/js/language/text-scanner.js ui-source/reference/yomitan-text-scanner.js
+          TOOLS=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          cp "$ANDROID_HOME/build-tools/$TOOLS/lib/apksigner.jar" ui-source/reference/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-source-snapshot
+          path: ui-source/
+          retention-days: 14

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="scroll_translate_lookup_description">Experimental Scroll Translate dictionary lookup (Android 14+). When Google overlays another app, a short tap in the content area captures the original app window for Chimahon OCR. Swipes are delegated by Android. Text taps open definitions; an empty tap closes lookup. This changes touch handling while active. Captures are held in memory; the selected OCR engine may use the network. System edges and detected Google buttons are excluded. Disable this service here to stop.</string>
+</resources>

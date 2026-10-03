@@ -20,6 +20,7 @@ class ScreenLookupTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+
         if (ScreenLookupServiceState.isRunning.value) {
             ScreenLookupService.stop(this)
             updateTile(active = false)

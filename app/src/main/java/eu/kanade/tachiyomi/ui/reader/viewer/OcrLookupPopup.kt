@@ -139,6 +139,7 @@ fun OcrLookupPopup(
     anchorY: Float,
     anchorWidth: Float = 0f,
     anchorHeight: Float = 0f,
+    sourceRects: List<PopupSourceRect> = emptyList(),
     isVertical: Boolean,
     activeProfile: chimahon.anki.AnkiProfile,
     type: String = "manga",
@@ -749,108 +750,92 @@ fun OcrLookupPopup(
         null
     }
 
-    // === Popup Positioning: priority-based 4-direction ===
+    // === Popup Positioning: Yomitan-style constrained placement ===
     data class PopupLayoutResult(val x: Float, val y: Float, val widthPx: Float, val heightPx: Float)
 
     val layoutResult = remember(
-        anchorX, anchorY, anchorWidth, anchorHeight,
+        anchorX, anchorY, anchorWidth, anchorHeight, sourceRects,
         screenWidthPx, screenHeightPx, popupWidthPx, popupHeightPx, isVertical, popupModePref,
         isRecursiveChild,
     ) {
-        val w: Float
-        val h: Float
-        val bestX: Float
-        val bestY: Float
+        val fallbackSource = PopupSourceRect(
+            left = anchorX,
+            top = anchorY,
+            right = anchorX + maxOf(anchorWidth, 1f),
+            bottom = anchorY + maxOf(anchorHeight, 1f),
+        )
+        val effectiveSources = sourceRects.ifEmpty { listOf(fallbackSource) }
+        val boundingSource = PopupSourceRect(
+            left = effectiveSources.minOf { it.left },
+            top = effectiveSources.minOf { it.top },
+            right = effectiveSources.maxOf { it.right },
+            bottom = effectiveSources.maxOf { it.bottom },
+        )
 
         when (if (isRecursiveChild) "floating" else popupModePref) {
             "full_width" -> {
-                w = screenWidthPx
-                h = minOf(popupHeightPx, screenHeightPx)
-                bestX = 0f
-                val expH = anchorHeight
-                val bottomY = screenHeightPx - h
-                val overlapsWord = anchorWidth > 0f && anchorHeight > 0f &&
-                    bottomY < anchorY + expH
-                bestY = if (overlapsWord) 0f else bottomY
+                val width = screenWidthPx
+                val preferredHeight = minOf(popupHeightPx, screenHeightPx)
+                val preferBelow = (boundingSource.top + boundingSource.bottom) / 2f < screenHeightPx / 2f
+                val placed = PopupPlacementPolicy.bestHorizontal(
+                    sources = effectiveSources,
+                    preferredWidth = width,
+                    preferredHeight = preferredHeight,
+                    viewportWidth = screenWidthPx,
+                    viewportHeight = screenHeightPx,
+                    padding = 0f,
+                    gap = gapPx,
+                    preferBelow = preferBelow,
+                )
+                PopupLayoutResult(0f, placed.y, width, placed.height)
             }
             "full_height" -> {
-                w = minOf(popupWidthPx, screenWidthPx * 0.5f, screenWidthPx - paddingPx * 2)
-                h = screenHeightPx - paddingPx * 2
-                val acx = anchorX + anchorWidth / 2f
-                bestY = paddingPx
-                bestX = if (acx < screenWidthPx / 2f) {
-                    (screenWidthPx - w - paddingPx).coerceAtLeast(paddingPx)
-                } else {
-                    paddingPx
-                }
+                val preferredWidth = minOf(popupWidthPx, screenWidthPx * 0.5f, screenWidthPx - paddingPx * 2)
+                val height = screenHeightPx - paddingPx * 2
+                val preferRight = (boundingSource.left + boundingSource.right) / 2f < screenWidthPx / 2f
+                val placed = PopupPlacementPolicy.bestVertical(
+                    sources = effectiveSources,
+                    preferredWidth = preferredWidth,
+                    preferredHeight = height,
+                    viewportWidth = screenWidthPx,
+                    viewportHeight = screenHeightPx,
+                    padding = paddingPx,
+                    gap = gapPx,
+                    preferRight = preferRight,
+                )
+                PopupLayoutResult(placed.x, paddingPx, placed.width, height)
             }
             else -> {
-            w = minOf(popupWidthPx, screenWidthPx)
-            h = minOf(popupHeightPx, screenHeightPx)
+                val preferredWidth = minOf(popupWidthPx, screenWidthPx - paddingPx * 2)
+                val preferredHeight = minOf(popupHeightPx, screenHeightPx - paddingPx * 2)
 
-            val ax = anchorX
-            val ay = anchorY
-            val aw = anchorWidth
-            val ah = anchorHeight
-            val acx = ax + aw / 2f
-            val acy = ay + ah / 2f
-
-            val expW = maxOf(aw, 1f)
-            val expH = maxOf(ah, 1f)
-
-            // 4 candidate positions (top-left corner of popup)
-            data class Pos(val x: Float, val y: Float)
-
-            val right  = Pos(ax + expW + gapPx, acy - h / 2f) // Right of full term
-            val left   = Pos(ax - w - gapPx, acy - h / 2f) // Left of anchor
-            val below  = Pos(acx - w / 2f, ay + expH + gapPx) // Below full term
-            val above  = Pos(acx - w / 2f, ay - h - gapPx) // Above anchor
-
-            val all = listOf(right, left, below, above)
-
-            // Priority order: 0=Right, 1=Left, 2=Below, 3=Above
-            val order = if (isRecursiveChild) {
-                if (acy < screenHeightPx / 2f) listOf(2, 3, 0, 1) else listOf(3, 2, 0, 1)
-            } else if (isVertical) {
-                if (acx < screenWidthPx / 2f) listOf(0, 1, 2, 3) else listOf(1, 0, 2, 3)
-            } else {
-                if (acy < screenHeightPx / 2f) listOf(2, 3, 0, 1) else listOf(3, 2, 0, 1)
-            }
-
-            var bx = paddingPx
-            var by = paddingPx
-            var found = false
-
-            for (idx in order) {
-                val p = all[idx]
-                val maxCx = (screenWidthPx - w - paddingPx).coerceAtLeast(paddingPx)
-                val maxCy = (screenHeightPx - h - paddingPx).coerceAtLeast(paddingPx)
-                val cx = p.x.coerceIn(paddingPx, maxCx)
-                val cy = p.y.coerceIn(paddingPx, maxCy)
-
-                val overlaps = cx < ax + expW && cx + w > ax &&
-                    cy < ay + expH && cy + h > ay
-
-                if (!overlaps) {
-                    bx = cx
-                    by = cy
-                    found = true
-                    break
+                val placed = if (isVertical && !isRecursiveChild) {
+                    PopupPlacementPolicy.bestVertical(
+                        sources = effectiveSources,
+                        preferredWidth = preferredWidth,
+                        preferredHeight = preferredHeight,
+                        viewportWidth = screenWidthPx,
+                        viewportHeight = screenHeightPx,
+                        padding = paddingPx,
+                        gap = gapPx,
+                        preferRight = (boundingSource.left + boundingSource.right) / 2f < screenWidthPx / 2f,
+                    )
+                } else {
+                    PopupPlacementPolicy.bestHorizontal(
+                        sources = effectiveSources,
+                        preferredWidth = preferredWidth,
+                        preferredHeight = preferredHeight,
+                        viewportWidth = screenWidthPx,
+                        viewportHeight = screenHeightPx,
+                        padding = paddingPx,
+                        gap = gapPx,
+                        preferBelow = (boundingSource.top + boundingSource.bottom) / 2f < screenHeightPx / 2f,
+                    )
                 }
-            }
 
-            if (!found) {
-                val pref = all[order[0]]
-                bestX = pref.x.coerceIn(paddingPx, (screenWidthPx - w - paddingPx).coerceAtLeast(paddingPx))
-                bestY = pref.y.coerceIn(paddingPx, (screenHeightPx - h - paddingPx).coerceAtLeast(paddingPx))
-            } else {
-                bestX = bx
-                bestY = by
-            }
+                PopupLayoutResult(placed.x, placed.y, placed.width, placed.height)
             }
         }
-
-        PopupLayoutResult(bestX, bestY, w, h)
     }
 
     val actualWidthDp = with(density) { layoutResult.widthPx.toDp() }

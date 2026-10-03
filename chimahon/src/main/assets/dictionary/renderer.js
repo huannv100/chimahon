@@ -11,6 +11,7 @@
   const MAX_SCAN_CHARS = 24;   // chars to extract forward from tap point
 
   let _lastSelection = '';
+  let _pendingRecursiveSelection = '';
   let _pendingPopupSelection = '';
   let _selectedDictionaries = {}; // entryIndex -> dictName
   let _wordAudioEnabled = true;
@@ -742,7 +743,7 @@
     const node = range.startContainer;
     if (!node || node.nodeType !== Node.TEXT_NODE) return null;
 
-    const container = node.parentElement?.closest?.('.definition-item, .entry-body-section, .entry-body, article') || document.body;
+    const container = node.parentElement?.closest?.('.dictionary-header, .definition-item, .entry-body-section, .entry-body, article') || document.body;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
       acceptNode: (n) => {
         const parent = n.parentElement;
@@ -805,7 +806,7 @@
 
     if (isCJK(ch)) {
       // Collect forward text across nodes, skipping furigana (<rt>)
-      const container = node.parentElement.closest('.entry-body, .headword, .gloss-content') || document.body;
+      const container = node.parentElement.closest('.dictionary-header, .entry-body, .headword, .gloss-content') || document.body;
       const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
         acceptNode: (n) => isFurigana(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
       });
@@ -1001,7 +1002,7 @@
     const start = _recursiveSelectionStart;
     if (!start || !Number.isFinite(codePointCount) || codePointCount <= 0) return null;
 
-    const root = start.node.parentElement?.closest('.entry-body, .headword, .gloss-content') || document.body;
+    const root = start.node.parentElement?.closest('.dictionary-header, .entry-body, .headword, .gloss-content') || document.body;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => isFurigana(node) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
@@ -1060,28 +1061,65 @@
     if (_listenersInstalled) return;
     _listenersInstalled = true;
 
+    // Android WebView may collapse an active text selection as soon as the
+    // user touches it. Capture it on pointerdown (capture phase) so recursive
+    // lookup can still use the selected headword substring on the later click.
+    document.addEventListener('pointerdown', (e) => {
+      const target = e.target;
+      if (!target) return;
+      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, details, summary, a, .gloss-link, .gloss-sc-a')) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) {
+        _pendingRecursiveSelection = selection.toString().trim();
+      } else {
+        _pendingRecursiveSelection = '';
+      }
+    }, {capture: true, passive: true});
+
     document.addEventListener('click', (e) => {
       const target = e.target;
       if (!target) return;
 
-      // If tapping on a rendered kanji-tappable span, route as kanji-only lookup
-      const kanjiSpan = target.closest('.kanji-tappable');
-      if (kanjiSpan) {
-        navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
-        e.stopPropagation();
-        return;
-      }
-
       // Skip interactive controls — buttons, dict tags, inflection toggles, etc.
-      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, .dictionary-header, details, summary, a, .gloss-link, .gloss-sc-a')) return;
+      if (target.closest('button, .anki-add-btn, .lookup-tab, .entry-deinflection-row, .tag, details, summary, a, .gloss-link, .gloss-sc-a')) return;
 
-      // Manual text selection takes priority for recursive lookup. This lets the
-      // user select only part of a long headword/phrase and consult that exact
-      // substring instead of looking up the whole rendered expression.
+      // Manual text selection must win over single-kanji taps. Headwords wrap
+      // each Han character in .kanji-tappable spans, so checking kanji first
+      // prevents a selected multi-character substring from ever reaching
+      // recursive lookup.
       const selection = window.getSelection();
       const selectedText = selection && !selection.isCollapsed
         ? selection.toString().trim()
-        : (_lastSelection || '').trim();
+        : (_pendingRecursiveSelection || _lastSelection || '').trim();
+      _pendingRecursiveSelection = '';
+
+      if (!selectedText) {
+        const kanjiSpan = target.closest('.kanji-tappable');
+        const insideHeadword = !!target.closest('.headword');
+
+        if (kanjiSpan && insideHeadword && kanjiSpan.dataset.headwordExpression) {
+          const expression = kanjiSpan.dataset.headwordExpression;
+          const offset = Number.parseInt(kanjiSpan.dataset.headwordOffset || '0', 10);
+          const query = expression.slice(Number.isFinite(offset) ? offset : 0).trim();
+          if (query) {
+            rememberRecursiveSelectionAtPoint(e.clientX, e.clientY);
+            let url = CHIMA_SCHEME + '//lookup?q=' + encodeURIComponent(query);
+            url += '&sentence=' + encodeURIComponent(expression);
+            url += '&offset=' + encodeURIComponent(String(Number.isFinite(offset) ? offset : 0));
+            url += '&x=' + Math.round(e.clientX);
+            url += '&y=' + Math.round(e.clientY);
+            navigateTo(url);
+            e.stopPropagation();
+            return;
+          }
+        }
+
+        if (kanjiSpan && !insideHeadword) {
+          navigateTo(CHIMA_SCHEME + '//kanji?q=' + encodeURIComponent(kanjiSpan.textContent));
+          e.stopPropagation();
+          return;
+        }
+      }
 
       const word = selectedText || extractTextAtPoint(e.clientX, e.clientY);
       if (!word) return;
@@ -1830,17 +1868,22 @@
     return [{text: expression, reading: reading}];
   }
 
-  function appendWithKanjiSpans(parent, text) {
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
+  function appendWithKanjiSpans(parent, text, headwordExpression = null, baseOffset = 0) {
+    let localOffset = 0;
+    for (const ch of text) {
       if (isKanjiCodepoint(ch.codePointAt(0))) {
         const span = document.createElement('span');
         span.className = 'kanji-tappable';
         span.textContent = ch;
+        if (headwordExpression != null) {
+          span.dataset.headwordExpression = headwordExpression;
+          span.dataset.headwordOffset = String(baseOffset + localOffset);
+        }
         parent.appendChild(span);
       } else {
         parent.appendChild(document.createTextNode(ch));
       }
+      localOffset += ch.length;
     }
   }
 
@@ -1856,13 +1899,14 @@
     })();
 
     const segments = distributeFurigana(expression, reading);
+    let expressionOffset = 0;
 
     for (const segment of segments) {
       if (segment.reading) {
         const ruby = document.createElement('ruby');
         ruby.className = 'headword-text-container headword-term';
         if (popularityClass) ruby.classList.add(popularityClass);
-        appendWithKanjiSpans(ruby, segment.text);
+        appendWithKanjiSpans(ruby, segment.text, expression, expressionOffset);
 
         const rt = document.createElement('rt');
         rt.className = 'headword-furigana';
@@ -1874,9 +1918,10 @@
         const termNode = document.createElement('span');
         termNode.className = 'headword-term';
         if (popularityClass) termNode.classList.add(popularityClass);
-        appendWithKanjiSpans(termNode, segment.text);
+        appendWithKanjiSpans(termNode, segment.text, expression, expressionOffset);
         headword.appendChild(termNode);
       }
+      expressionOffset += segment.text.length;
     }
 
     if (termTags) {

@@ -139,6 +139,7 @@ fun OcrLookupPopup(
     anchorY: Float,
     anchorWidth: Float = 0f,
     anchorHeight: Float = 0f,
+    sourceRects: List<PopupSourceRect> = emptyList(),
     isVertical: Boolean,
     activeProfile: chimahon.anki.AnkiProfile,
     type: String = "manga",
@@ -753,24 +754,31 @@ fun OcrLookupPopup(
     data class PopupLayoutResult(val x: Float, val y: Float, val widthPx: Float, val heightPx: Float)
 
     val layoutResult = remember(
-        anchorX, anchorY, anchorWidth, anchorHeight,
+        anchorX, anchorY, anchorWidth, anchorHeight, sourceRects,
         screenWidthPx, screenHeightPx, popupWidthPx, popupHeightPx, isVertical, popupModePref,
         isRecursiveChild,
     ) {
-        val source = PopupSourceRect(
+        val fallbackSource = PopupSourceRect(
             left = anchorX,
             top = anchorY,
             right = anchorX + maxOf(anchorWidth, 1f),
             bottom = anchorY + maxOf(anchorHeight, 1f),
+        )
+        val effectiveSources = sourceRects.ifEmpty { listOf(fallbackSource) }
+        val boundingSource = PopupSourceRect(
+            left = effectiveSources.minOf { it.left },
+            top = effectiveSources.minOf { it.top },
+            right = effectiveSources.maxOf { it.right },
+            bottom = effectiveSources.maxOf { it.bottom },
         )
 
         when (if (isRecursiveChild) "floating" else popupModePref) {
             "full_width" -> {
                 val width = screenWidthPx
                 val preferredHeight = minOf(popupHeightPx, screenHeightPx)
-                val preferBelow = (source.top + source.bottom) / 2f < screenHeightPx / 2f
-                val placed = PopupPlacementPolicy.horizontal(
-                    source = source,
+                val preferBelow = (boundingSource.top + boundingSource.bottom) / 2f < screenHeightPx / 2f
+                val placed = PopupPlacementPolicy.bestHorizontal(
+                    sources = effectiveSources,
                     preferredWidth = width,
                     preferredHeight = preferredHeight,
                     viewportWidth = screenWidthPx,
@@ -784,9 +792,9 @@ fun OcrLookupPopup(
             "full_height" -> {
                 val preferredWidth = minOf(popupWidthPx, screenWidthPx * 0.5f, screenWidthPx - paddingPx * 2)
                 val height = screenHeightPx - paddingPx * 2
-                val preferRight = (source.left + source.right) / 2f < screenWidthPx / 2f
-                val placed = PopupPlacementPolicy.vertical(
-                    source = source,
+                val preferRight = (boundingSource.left + boundingSource.right) / 2f < screenWidthPx / 2f
+                val placed = PopupPlacementPolicy.bestVertical(
+                    sources = effectiveSources,
                     preferredWidth = preferredWidth,
                     preferredHeight = height,
                     viewportWidth = screenWidthPx,
@@ -802,26 +810,26 @@ fun OcrLookupPopup(
                 val preferredHeight = minOf(popupHeightPx, screenHeightPx - paddingPx * 2)
 
                 val placed = if (isVertical && !isRecursiveChild) {
-                    PopupPlacementPolicy.vertical(
-                        source = source,
+                    PopupPlacementPolicy.bestVertical(
+                        sources = effectiveSources,
                         preferredWidth = preferredWidth,
                         preferredHeight = preferredHeight,
                         viewportWidth = screenWidthPx,
                         viewportHeight = screenHeightPx,
                         padding = paddingPx,
                         gap = gapPx,
-                        preferRight = (source.left + source.right) / 2f < screenWidthPx / 2f,
+                        preferRight = (boundingSource.left + boundingSource.right) / 2f < screenWidthPx / 2f,
                     )
                 } else {
-                    PopupPlacementPolicy.horizontal(
-                        source = source,
+                    PopupPlacementPolicy.bestHorizontal(
+                        sources = effectiveSources,
                         preferredWidth = preferredWidth,
                         preferredHeight = preferredHeight,
                         viewportWidth = screenWidthPx,
                         viewportHeight = screenHeightPx,
                         padding = paddingPx,
                         gap = gapPx,
-                        preferBelow = (source.top + source.bottom) / 2f < screenHeightPx / 2f,
+                        preferBelow = (boundingSource.top + boundingSource.bottom) / 2f < screenHeightPx / 2f,
                     )
                 }
 

@@ -6,20 +6,7 @@ import org.junit.jupiter.api.TestFactory
 class PopupPlacementPolicyTest {
 
     @TestFactory
-    fun yomitanStylePlacementChecks(): List<DynamicTest> = popupPlacementChecks().map { (name, run) ->
-        DynamicTest.dynamicTest(name) { run() }
-    }
-}
-
-internal fun popupPlacementChecks(): List<Pair<String, () -> Unit>> {
-    fun overlaps(result: PopupPlacement, source: PopupSourceRect): Boolean {
-        return result.x < source.right &&
-            result.x + result.width > source.left &&
-            result.y < source.bottom &&
-            result.y + result.height > source.top
-    }
-
-    return listOf(
+    fun yomitanStylePlacementChecks(): List<DynamicTest> = listOf(
         "horizontal prefers below when there is room" to {
             val source = PopupSourceRect(100f, 200f, 300f, 260f)
             val result = PopupPlacementPolicy.horizontal(
@@ -83,5 +70,12 @@ internal fun popupPlacementChecks(): List<Pair<String, () -> Unit>> {
             check(result.x + result.width <= source.left - 16f + 0.01f)
             check(!overlaps(result, source))
         },
-    )
+    ).map { (name, run) -> DynamicTest.dynamicTest(name) { run() } }
+
+    private fun overlaps(result: PopupPlacement, source: PopupSourceRect): Boolean {
+        return result.x < source.right &&
+            result.x + result.width > source.left &&
+            result.y < source.bottom &&
+            result.y + result.height > source.top
+    }
 }

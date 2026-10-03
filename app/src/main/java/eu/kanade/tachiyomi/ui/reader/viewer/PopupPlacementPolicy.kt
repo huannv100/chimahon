@@ -17,6 +17,67 @@ internal data class PopupPlacement(
 
 internal object PopupPlacementPolicy {
 
+    fun bestHorizontal(
+        sources: List<PopupSourceRect>,
+        preferredWidth: Float,
+        preferredHeight: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        padding: Float,
+        gap: Float,
+        preferBelow: Boolean,
+    ): PopupPlacement {
+        val candidates = candidateSources(sources)
+        var best: PopupPlacement? = null
+        for ((index, source) in candidates.withIndex()) {
+            val result = horizontal(
+                source, preferredWidth, preferredHeight,
+                viewportWidth, viewportHeight, padding, gap, preferBelow,
+            )
+            val isBoundingCandidate = index >= sources.size
+            if (!isBoundingCandidate && overlapsAny(result, sources, ignoreIndex = index)) continue
+            if (best == null || result.height > best.height) {
+                best = result
+                if (result.height >= preferredHeight) break
+            }
+        }
+        return best ?: horizontal(
+            boundingRect(sources), preferredWidth, preferredHeight,
+            viewportWidth, viewportHeight, padding, gap, preferBelow,
+        )
+    }
+
+    fun bestVertical(
+        sources: List<PopupSourceRect>,
+        preferredWidth: Float,
+        preferredHeight: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        padding: Float,
+        gap: Float,
+        preferRight: Boolean,
+    ): PopupPlacement {
+        val candidates = candidateSources(sources)
+        var best: PopupPlacement? = null
+        for ((index, source) in candidates.withIndex()) {
+            val result = vertical(
+                source, preferredWidth, preferredHeight,
+                viewportWidth, viewportHeight, padding, gap, preferRight,
+            )
+            val isBoundingCandidate = index >= sources.size
+            if (!isBoundingCandidate && overlapsAny(result, sources, ignoreIndex = index)) continue
+            if (best == null || result.width > best.width) {
+                best = result
+                if (result.width >= preferredWidth) break
+            }
+        }
+        return best ?: vertical(
+            boundingRect(sources), preferredWidth, preferredHeight,
+            viewportWidth, viewportHeight, padding, gap, preferRight,
+        )
+    }
+
+
     fun horizontal(
         source: PopupSourceRect,
         preferredWidth: Float,
@@ -83,6 +144,34 @@ internal object PopupPlacementPolicy {
         )
 
         return PopupPlacement(x, y, width, height, placedAfter)
+    }
+
+    private fun candidateSources(sources: List<PopupSourceRect>): List<PopupSourceRect> {
+        if (sources.isEmpty()) return listOf(PopupSourceRect(0f, 0f, 1f, 1f))
+        return if (sources.size > 1) sources + boundingRect(sources) else sources
+    }
+
+    private fun boundingRect(sources: List<PopupSourceRect>): PopupSourceRect {
+        if (sources.isEmpty()) return PopupSourceRect(0f, 0f, 1f, 1f)
+        return PopupSourceRect(
+            left = sources.minOf { it.left },
+            top = sources.minOf { it.top },
+            right = sources.maxOf { it.right },
+            bottom = sources.maxOf { it.bottom },
+        )
+    }
+
+    private fun overlapsAny(
+        placement: PopupPlacement,
+        sources: List<PopupSourceRect>,
+        ignoreIndex: Int,
+    ): Boolean = sources.indices.any { i ->
+        if (i == ignoreIndex) return@any false
+        val source = sources[i]
+        placement.x < source.right &&
+            placement.x + placement.width > source.left &&
+            placement.y < source.bottom &&
+            placement.y + placement.height > source.top
     }
 
     /**

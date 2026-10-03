@@ -1,4 +1,4 @@
-name: PR build check
+name: Verify and build Yomitan UI
 
 on:
   pull_request:
@@ -13,71 +13,87 @@ permissions:
 
 jobs:
   build:
-    name: Verify and build Chimahon Huan
+    name: Test and build Chimahon Huan Yomitan
     runs-on: ubuntu-24.04
+    timeout-minutes: 55
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
-
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version-file: .github/.java-version
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Prepare FlexibleAdapter source
+      - name: Prepare pinned FlexibleAdapter
         shell: bash
         run: |
           set -euo pipefail
-          git clone https://github.com/arkon/FlexibleAdapter vendor/FlexibleAdapter
+          if [ ! -d vendor/FlexibleAdapter/.git ]; then
+            git clone https://github.com/arkon/FlexibleAdapter vendor/FlexibleAdapter
+          fi
           git -C vendor/FlexibleAdapter checkout c80135339bcff5f7f8c2c2380329dfc155b26232
-
-      - name: Verify source invariants
+      - name: Prepare and verify actual compiled sources
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'applicationId = "app.chimahon.huan"' app/build.gradle.kts
-          grep -q 'android:label="Chimahon Huan"' app/src/main/AndroidManifest.xml
-          grep -q 'ScrollTranslateLookupAccessibilityService' app/src/main/AndroidManifest.xml
+          python3 qa/prepare_yomitan_build.py
+          mkdir -p qa-output/generated-source
+          git rev-parse HEAD > qa-output/source-commit.txt
+          grep -q 'applicationId = "app.chimahon.huan.yomitan"' app/build.gradle.kts
+          grep -q 'android:label="Chimahon Huan Yomitan"' app/src/main/AndroidManifest.xml
           ! grep -q 'OcrTapHint(' app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookupOverlayController.kt
-          grep -q 'Manual text selection must win over single-kanji taps' chimahon/src/main/assets/dictionary/renderer.js
-          grep -q '_pendingRecursiveSelection' chimahon/src/main/assets/dictionary/renderer.js
-          grep -q "addEventListener('pointerdown'" chimahon/src/main/assets/dictionary/renderer.js
-          grep -q "const insideHeadword = !!target.closest('.headword')" chimahon/src/main/assets/dictionary/renderer.js
           ! grep -q 'firebase-analytics' gradle/libs.versions.toml
           ! grep -q 'firebase-crashlytics' gradle/libs.versions.toml
-
-      - name: Run unit tests
-        run: ./gradlew testReleaseUnitTest
-
-      - name: Build arm64 preview APK
-        run: ./gradlew assemblePreview
-
-      - name: Verify APK identity and contents
+          grep -q 'ChimaHeadwordSelection' chimahon/src/main/assets/dictionary/renderer.js
+          grep -q 'sourceRects = request.sourceRects' app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/OcrLookupPopup.kt
+          cp app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/{OcrLookupPopup,PopupPlacementPolicy}.kt qa-output/generated-source/
+          cp chimahon/src/main/assets/dictionary/{renderer,headword-selection}.js qa-output/generated-source/
+          sha256sum qa-output/generated-source/* > qa-output/generated-source-sha256.txt
+      - name: Chromium headword interaction tests
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find app/build/outputs/apk/preview -name '*arm64-v8a*.apk' -o -name 'app-universal-preview.apk' | head -1)"
+          python3 -m venv .qa-venv
+          .qa-venv/bin/pip install playwright==1.57.0
+          .qa-venv/bin/python -m playwright install --with-deps chromium
+          .qa-venv/bin/python qa/verify_headwords.py | tee qa-output/headword-tests.json
+      - name: Run native unit tests including layout regression suite
+        run: ./gradlew testReleaseUnitTest -PreleaseVersionName=2.4.6-huan-yomitan.1 -PreleaseVersionCode=2461001 --stacktrace
+      - name: Compile ARM64 APK from tested sources
+        run: ./gradlew assemblePreview -PreleaseVersionName=2.4.6-huan-yomitan.1 -PreleaseVersionCode=2461001 --stacktrace
+      - name: Verify APK package version signature and bundled assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/preview -name '*arm64-v8a*.apk' -print -quit)
           test -n "$APK"
-          BUILD_TOOLS="$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
-          "$AAPT" dump badging "$APK" | tee /tmp/badging.txt
-          grep -q "package: name='app.chimahon.huan.beta'" /tmp/badging.txt
-          unzip -p "$APK" assets/dictionary/renderer.js | grep -q 'Manual text selection must win over single-kanji taps'
-          unzip -p "$APK" assets/dictionary/renderer.js | grep -q '_pendingRecursiveSelection'
-          unzip -p "$APK" assets/dictionary/renderer.js | grep -q "insideHeadword"
-          cp "$APK" Chimahon-Huan-v2.4.6-arm64.apk
-          sha256sum Chimahon-Huan-v2.4.6-arm64.apk
-
-      - name: Upload APK
+          TOOLS=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$TOOLS/aapt" dump badging "$APK" > qa-output/apk-badging.txt
+          grep -q "package: name='app.chimahon.huan.yomitan.beta' versionCode='2461001'" qa-output/apk-badging.txt
+          grep -q "application-label:'Chimahon Huan Yomitan'" qa-output/apk-badging.txt
+          "$ANDROID_HOME/build-tools/$TOOLS/apksigner" verify --verbose --print-certs "$APK" > qa-output/ci-signature.txt
+          unzip -p "$APK" assets/dictionary/renderer.js > qa-output/apk-renderer.js
+          cmp qa-output/apk-renderer.js chimahon/src/main/assets/dictionary/renderer.js
+          cp "$APK" Chimahon-Huan-Yomitan-1-arm64-ci.apk
+          sha256sum Chimahon-Huan-Yomitan-1-arm64-ci.apk | tee qa-output/ci-apk-sha256.txt
+      - name: Upload compiled APK
         uses: actions/upload-artifact@v4
         with:
-          name: Chimahon-Huan-v2.4.6-arm64
-          path: Chimahon-Huan-v2.4.6-arm64.apk
+          name: Chimahon-Huan-Yomitan-1-arm64-ci
+          path: Chimahon-Huan-Yomitan-1-arm64-ci.apk
           if-no-files-found: error
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yomitan-UI-verification
+          path: |
+            qa-output/
+            app/build/test-results/testReleaseUnitTest/*.xml
+            chimahon/build/test-results/testReleaseUnitTest/*.xml
+          if-no-files-found: warn

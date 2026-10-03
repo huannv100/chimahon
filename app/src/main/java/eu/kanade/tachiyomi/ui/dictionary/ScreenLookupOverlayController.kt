@@ -425,6 +425,14 @@ internal fun ScreenLookupOverlay(
         val cropPreset = chimahon.ocr.CropPresets.aspectByKey(cropPresetKey)
 
         if (selected != null) {
+            val popupSourceRects = ocrMatchedSourceRects(
+                block = selected.block,
+                selection = selected,
+                activeMatchCount = matchedCharCount,
+                activeMatchOffset = matchOffset,
+                widthPx = widthPx,
+                heightPx = heightPx,
+            )
             val (popupScreenshot, popupOnRequestScreenshot) = if (cropMode == "no_screenshot") {
                 null to null
             } else if (cropPreset != null) {
@@ -457,6 +465,7 @@ internal fun ScreenLookupOverlay(
                     anchorY = selected.anchorY,
                     anchorWidth = selected.anchorWidth,
                     anchorHeight = selected.anchorHeight,
+                    sourceRects = popupSourceRects,
                     isVertical = selected.block.vertical,
                     activeProfile = activeProfile,
                     type = type,
